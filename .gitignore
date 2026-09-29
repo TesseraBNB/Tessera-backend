@@ -1,0 +1,50 @@
+# Binaries
+/tessera
+/analyst
+tessera_test
+
+# Environment
+.env
+.env.local
+
+# Reports (generated output)
+reports/
+
+# Claude
+.claude/
+
+# Go
+*.exe
+*.test
+*.prof
+
+# Node / Frontend
+node_modules/
+frontend/node_modules/
+frontend/dist/
+frontend/.next/
+frontend/.vite/
+frontend/out/
+
+# Generated data
+epoch5_*.json
+
+# Build output
+frontend/dist/
+
+# Demo (internal only)
+DEMO_SCRIPT.md
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# nested repos, tracked separately
+frontend/
+skills/

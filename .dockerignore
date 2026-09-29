@@ -1,0 +1,25 @@
+# VCS & tooling
+.git
+.github
+.gitignore
+.dockerignore
+.claude
+.DS_Store
+*.md
+LICENSE
+
+# Secrets & local env
+.env
+.env.*
+
+# Frontend — deployed separately on Vercel, not part of the Go image
+frontend/
+
+# Build artifacts & generated output
+tessera
+reports/
+*.exe
+*.test
+*.prof
+examples/
+skills/
