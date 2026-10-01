@@ -7,6 +7,9 @@ tessera_test
 .env
 .env.local
 
+# Exported agent session logs (can contain pasted API keys)
+session-*.md
+
 # Reports (generated output)
 reports/
 
