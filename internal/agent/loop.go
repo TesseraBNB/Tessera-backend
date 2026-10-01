@@ -24,7 +24,7 @@ func (c *Client) Run(ctx context.Context, system, task string, emit EventFunc) (
 	msgs := []Message{{Role: "user", Content: []ContentBlock{{Type: "text", Text: task}}}}
 
 	for i := 0; i < c.cfg.AgentMaxIterations; i++ {
-		resp, _, err := c.sendMessages(ctx, messagesRequest{
+		resp, backendName, err := c.sendMessages(ctx, messagesRequest{
 			Model:     c.cfg.Model,
 			MaxTokens: maxTokens,
 			System:    orDefault(system, AnalystSystem),
@@ -65,7 +65,7 @@ func (c *Client) Run(ctx context.Context, system, task string, emit EventFunc) (
 
 		// Final turn: no more tool calls requested.
 		if resp.StopReason != "tool_use" {
-			emit(Event{Type: "done"})
+			emit(Event{Type: "done", Provider: backendName, Model: resp.Model})
 			return strings.TrimSpace(turnText.String()), nil
 		}
 

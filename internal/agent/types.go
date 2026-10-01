@@ -62,6 +62,10 @@ type Event struct {
 	Input   json.RawMessage `json:"input,omitempty"`
 	Result  string          `json:"result,omitempty"`
 	IsError bool            `json:"isError,omitempty"`
+
+	// Type == "done": the backend and model that produced the final answer.
+	Provider string `json:"provider,omitempty"`
+	Model    string `json:"model,omitempty"`
 }
 
 // EventFunc receives streaming events during an agent run. It is called

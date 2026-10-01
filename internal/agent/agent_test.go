@@ -95,6 +95,9 @@ func TestRunExecutesToolLoop(t *testing.T) {
 			}
 		case "done":
 			sawDone = true
+			if e.Provider != "hermes" || e.Model != "claude-opus-4-8" {
+				t.Errorf("done event provider/model = %q/%q, want hermes/claude-opus-4-8", e.Provider, e.Model)
+			}
 		}
 	}
 	if !sawCall || !sawResult || !sawDone {

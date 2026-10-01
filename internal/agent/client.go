@@ -140,6 +140,9 @@ func (c *Client) sendMessages(ctx context.Context, req messagesRequest) (*messag
 			errs = append(errs, fmt.Sprintf("%s: %v", b.name, err))
 			continue
 		}
+		if resp.Model == "" {
+			resp.Model = r.Model // not every provider echoes the model id
+		}
 		return resp, b.name, nil
 	}
 	return nil, "", fmt.Errorf("all AI backends failed: %s", strings.Join(errs, "; "))

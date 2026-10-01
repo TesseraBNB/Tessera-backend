@@ -109,7 +109,15 @@ func (a *App) runAgentStream(w http.ResponseWriter, r *http.Request, reportTitle
 	ctx, cancel := context.WithTimeout(r.Context(), agentRunTimeout)
 	defer cancel()
 
-	md, err := run(ctx, func(e agent.Event) { sse.send(e.Type, e) })
+	// The final "done" event names the backend and model that answered, which
+	// may be the fallback rather than the primary.
+	provider, model := strings.Join(a.agent.Backends(), "+"), a.cfg.Model
+	md, err := run(ctx, func(e agent.Event) {
+		if e.Type == "done" && e.Provider != "" {
+			provider, model = e.Provider, e.Model
+		}
+		sse.send(e.Type, e)
+	})
 	if err != nil {
 		sse.send("error", map[string]string{"error": err.Error()})
 		return
@@ -117,19 +125,19 @@ func (a *App) runAgentStream(w http.ResponseWriter, r *http.Request, reportTitle
 
 	result := map[string]any{"report": md}
 	if reportTitle != "" && strings.TrimSpace(md) != "" {
-		if path := a.generateReportPDF(reportTitle, md); path != "" {
+		if path := a.generateReportPDF(reportTitle, md, provider, model); path != "" {
 			result["reportPath"] = filepath.Base(path)
 		}
 	}
 	sse.send("result", result)
 }
 
-func (a *App) generateReportPDF(title, markdown string) string {
+func (a *App) generateReportPDF(title, markdown, provider, model string) string {
 	rep := &report.PDFReport{
 		Title:    title,
 		Subtitle: "Tessera — Public Goods Intelligence",
-		Model:    a.cfg.Model,
-		Provider: strings.Join(a.agent.Backends(), "+"),
+		Model:    model,
+		Provider: provider,
 		Metadata: map[string]string{"Generated": time.Now().UTC().Format(time.RFC3339)},
 		Sections: []report.PDFSection{{Heading: "Report", Body: markdown}},
 	}
