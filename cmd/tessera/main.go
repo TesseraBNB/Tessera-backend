@@ -530,7 +530,9 @@ func loadEnv() {
 	if err != nil {
 		return
 	}
-	for _, line := range strings.Split(string(data), "\n") {
+	// Tolerate hand-edited files: a UTF-8 BOM (Windows Notepad) and quoted values.
+	text := strings.TrimPrefix(string(data), "\ufeff")
+	for _, line := range strings.Split(text, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
@@ -538,6 +540,9 @@ func loadEnv() {
 		if k, v, ok := strings.Cut(line, "="); ok {
 			k = strings.TrimSpace(k)
 			v = strings.TrimSpace(v)
+			if len(v) >= 2 && (v[0] == '"' || v[0] == '\'') && v[len(v)-1] == v[0] {
+				v = v[1 : len(v)-1]
+			}
 			if os.Getenv(k) == "" { // don't override existing env
 				os.Setenv(k, v)
 			}

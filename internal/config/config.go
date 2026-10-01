@@ -50,7 +50,7 @@ type Config struct {
 const (
 	defaultPort               = "8080"
 	defaultModel              = "claude-opus-4-8"
-	defaultAllowedOrigins     = "http://localhost:3000"
+	defaultAllowedOrigins     = "http://localhost:3000,https://tessera-bnb.vercel.app" // deployed UI calls the visitor's localhost backend
 	defaultRateLimitRPS       = 1.0
 	defaultRateLimitBurst     = 5
 	defaultAgentMaxIterations = 12
