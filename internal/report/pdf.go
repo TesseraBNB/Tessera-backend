@@ -376,29 +376,29 @@ func sanitize(s string) string {
 
 	// Replace known Unicode chars
 	r := strings.NewReplacer(
-		"\u2014", "--",    // em dash
-		"\u2013", "-",     // en dash
-		"\u2192", "->",    // arrow
-		"\u2190", "<-",    // left arrow
-		"\u2022", "-",     // bullet
-		"\u2018", "'",     // left single quote
-		"\u2019", "'",     // right single quote
-		"\u201c", "\"",    // left double quote
-		"\u201d", "\"",    // right double quote
-		"\u2026", "...",   // ellipsis
-		"\u00a0", " ",     // non-breaking space
-		"\u2264", "<=",    // less-equal
-		"\u2265", ">=",    // greater-equal
-		"\u00d7", "x",     // multiplication
-		"\u2212", "-",     // minus
-		"\u2248", "~",     // approximately
-		"\u2260", "!=",    // not equal
+		"\u2014", "--", // em dash
+		"\u2013", "-", // en dash
+		"\u2192", "->", // arrow
+		"\u2190", "<-", // left arrow
+		"\u2022", "-", // bullet
+		"\u2018", "'", // left single quote
+		"\u2019", "'", // right single quote
+		"\u201c", "\"", // left double quote
+		"\u201d", "\"", // right double quote
+		"\u2026", "...", // ellipsis
+		"\u00a0", " ", // non-breaking space
+		"\u2264", "<=", // less-equal
+		"\u2265", ">=", // greater-equal
+		"\u00d7", "x", // multiplication
+		"\u2212", "-", // minus
+		"\u2248", "~", // approximately
+		"\u2260", "!=", // not equal
 		"\u03b1", "alpha", // alpha
-		"\u03b2", "beta",  // beta
-		"\u221e", "inf",   // infinity
-		"\u2705", "[x]",   // check mark
-		"\u274c", "[ ]",   // cross mark
-		"\u26a0", "[!]",   // warning
+		"\u03b2", "beta", // beta
+		"\u221e", "inf", // infinity
+		"\u2705", "[x]", // check mark
+		"\u274c", "[ ]", // cross mark
+		"\u26a0", "[!]", // warning
 	)
 	s = r.Replace(s)
 
