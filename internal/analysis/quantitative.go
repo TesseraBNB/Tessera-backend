@@ -313,9 +313,6 @@ func ComputeMultiScores(projects []ProjectMetrics, trustProfiles []TrustProfile,
 	minFund, maxFund := minMax(projects, func(p ProjectMetrics) float64 { return p.TotalFunding })
 
 	// --- EfficiencyScore: matched/allocated ratio, capped at 100x ---
-	type ratioEntry struct {
-		ratio float64
-	}
 	ratios := make([]float64, len(projects))
 	for i, p := range projects {
 		if p.Allocated > 0 {

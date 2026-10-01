@@ -18,29 +18,12 @@ jobs:
       - run: go build ./...
       - run: go vet ./...
       - run: go test -race ./...
-      - uses: golangci/golangci-lint-action@v6
+      # v1 binaries are built with an older Go and refuse go.mod's `go 1.25`.
+      - uses: golangci/golangci-lint-action@v9
         with:
-          version: v1.62
+          version: v2.14.0
 
-  frontend:
-    name: Frontend
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: frontend
-    steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 10
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: pnpm
-          cache-dependency-path: frontend/pnpm-lock.yaml
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm lint
-      - run: pnpm build
+  # The frontend lives in its own repo (TesseraBNB/Tessera-frontend) with its own CI.
 
   docker:
     name: Docker image

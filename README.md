@@ -137,7 +137,8 @@ go build ./... && go vet ./... && go test ./...   # backend
 cd frontend && pnpm lint && pnpm build            # frontend
 ```
 
-CI (`.github/workflows/ci.yml`) runs all of the above plus `golangci-lint` and a Docker build.
+CI (`.github/workflows/ci.yml`) runs the backend suite plus `golangci-lint` and a Docker build;
+the frontend repo runs its own lint + build.
 
 ## Project structure
 

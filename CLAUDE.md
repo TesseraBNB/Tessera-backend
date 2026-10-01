@@ -62,7 +62,8 @@ cd frontend && pnpm lint && pnpm build
 - Backend → **Railway** via `Dockerfile` + `railway.toml` (healthcheck `/api/health`).
 - Frontend → **Vercel** (`frontend/`, set `NEXT_PUBLIC_API_URL` to the Railway URL).
 - Env templates: `.env.example` (backend), `frontend/.env.example` (frontend).
-- CI: `.github/workflows/ci.yml` (Go build/vet/test/golangci-lint + frontend build + docker build).
+- CI: `.github/workflows/ci.yml` (Go build/vet/test + golangci-lint v2 + docker build). The
+  frontend is a separate repo (`frontend/`, TesseraBNB/Tessera-frontend) with its own lint/build CI.
 
 ## Structure
 
