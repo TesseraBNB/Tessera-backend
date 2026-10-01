@@ -47,7 +47,9 @@ cd frontend && pnpm lint && pnpm build
 
 - Read env **only** through `internal/config.Config`; do not call `os.Getenv` elsewhere.
 - No package-global mutable state in the server — everything hangs off `App`.
-- AI is **Claude-only**: Hermes + Anthropic fallback. Do not reintroduce Gemini/OpenAI/CLI.
+- AI transport speaks **only the Anthropic Messages API**: Hermes → Anthropic API or a
+  Messages-compatible provider (`ANTHROPIC_BASE_URL`) → optional second compatible provider
+  (`FALLBACK_*`, own model id). Do not add other wire formats (OpenAI/Gemini/CLI adapters).
 - Add an agent tool by registering it in `agent.buildRegistry` (`exec.go`); keep executors
   in-process and never expose a tool over HTTP.
 - Convert wei→ETH only via `ethunit.ToETH` (or `analysis.WeiToEth`, which delegates to it).

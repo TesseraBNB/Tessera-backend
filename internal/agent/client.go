@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -17,11 +19,14 @@ import (
 const (
 	maxTokens        = 8192
 	anthropicVersion = "2023-06-01"
-	anthropicURL     = "https://api.anthropic.com/v1/messages"
+	anthropicBaseURL = "https://api.anthropic.com"
 )
 
-// Client drives the Anthropic Messages API through Hermes (primary) with a
-// direct Anthropic API fallback, and owns the in-process tool-calling loop.
+var errNoBackend = errors.New("no AI backend configured (set HERMES_BASE_URL, ANTHROPIC_API_KEY, or FALLBACK_BASE_URL + FALLBACK_API_KEY)")
+
+// Client drives the Anthropic Messages API through Hermes (primary), then the
+// Anthropic API or any Messages-compatible provider, then an optional second
+// compatible provider, and owns the in-process tool-calling loop.
 type Client struct {
 	cfg  *config.Config
 	http *http.Client
@@ -56,10 +61,12 @@ type backend struct {
 	name    string
 	url     string
 	headers map[string]string
+	model   string // overrides the request model when set
 }
 
 // backends returns the configured Messages API endpoints in fallback order:
-// Hermes first (when set), then the Anthropic API.
+// Hermes first (when set), then the Anthropic API or a compatible provider at
+// ANTHROPIC_BASE_URL, then the optional fallback provider.
 func (c *Client) backends() []backend {
 	var bs []backend
 	if c.cfg.HermesBaseURL != "" {
@@ -70,13 +77,29 @@ func (c *Client) backends() []backend {
 		bs = append(bs, backend{name: "hermes", url: c.cfg.HermesBaseURL + "/v1/messages", headers: h})
 	}
 	if c.cfg.AnthropicAPIKey != "" {
-		bs = append(bs, backend{name: "anthropic", url: anthropicURL, headers: map[string]string{
-			"content-type":      "application/json",
-			"x-api-key":         c.cfg.AnthropicAPIKey,
-			"anthropic-version": anthropicVersion,
-		}})
+		bs = append(bs, messagesBackend(orDefault(c.cfg.AnthropicBaseURL, anthropicBaseURL), c.cfg.AnthropicAPIKey, ""))
+	}
+	if c.cfg.FallbackBaseURL != "" && c.cfg.FallbackAPIKey != "" {
+		bs = append(bs, messagesBackend(c.cfg.FallbackBaseURL, c.cfg.FallbackAPIKey, c.cfg.FallbackModel))
 	}
 	return bs
+}
+
+// messagesBackend builds an x-api-key backend for the Anthropic API or a
+// Messages-compatible provider. Non-Anthropic providers are named by host so
+// status and reports show which provider actually served the run.
+func messagesBackend(base, apiKey, model string) backend {
+	name := "anthropic"
+	if base != anthropicBaseURL {
+		if u, err := url.Parse(base); err == nil && u.Host != "" {
+			name = u.Host
+		}
+	}
+	return backend{name: name, url: base + "/v1/messages", model: model, headers: map[string]string{
+		"content-type":      "application/json",
+		"x-api-key":         apiKey,
+		"anthropic-version": anthropicVersion,
+	}}
 }
 
 // HasBackend reports whether at least one AI backend is configured.
@@ -100,14 +123,18 @@ func (c *Client) Model() string { return c.cfg.Model }
 func (c *Client) sendMessages(ctx context.Context, req messagesRequest) (*messagesResponse, string, error) {
 	bs := c.backends()
 	if len(bs) == 0 {
-		return nil, "", fmt.Errorf("no AI backend configured (set HERMES_BASE_URL or ANTHROPIC_API_KEY)")
-	}
-	body, err := json.Marshal(req)
-	if err != nil {
-		return nil, "", err
+		return nil, "", errNoBackend
 	}
 	var errs []string
 	for _, b := range bs {
+		r := req
+		if b.model != "" {
+			r.Model = b.model
+		}
+		body, err := json.Marshal(r)
+		if err != nil {
+			return nil, "", err
+		}
 		resp, err := c.postOne(ctx, b, body)
 		if err != nil {
 			errs = append(errs, fmt.Sprintf("%s: %v", b.name, err))

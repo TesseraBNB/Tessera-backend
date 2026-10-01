@@ -65,6 +65,8 @@ Backend (`.env`):
 | --- | --- | --- |
 | `HERMES_BASE_URL` / `HERMES_TOKEN` | Relay to a real Claude Code Opus 4.8 agent (primary) | — |
 | `ANTHROPIC_API_KEY` | Direct Anthropic API (fallback / simplest local setup) | — |
+| `ANTHROPIC_BASE_URL` | Any Anthropic Messages-compatible provider (e.g. `https://api.xkiro.com`) | Anthropic API |
+| `FALLBACK_BASE_URL` / `FALLBACK_API_KEY` / `FALLBACK_MODEL` | Second Messages-compatible provider, tried last, with its own model id | — |
 | `TESSERA_MODEL` | Agent model | `claude-opus-4-8` |
 | `PORT` | HTTP port | `8080` |
 | `ALLOWED_ORIGINS` | CORS allowlist (CSV) | `http://localhost:3000` |
@@ -74,7 +76,7 @@ Backend (`.env`):
 | `AGENT_DAILY_BUDGET` | Global agent runs/day, 0 = unlimited | `0` |
 | `CACHE_TTL` | In-memory upstream cache | `10m` |
 
-At least one of `HERMES_BASE_URL` or `ANTHROPIC_API_KEY` must be set.
+At least one of `HERMES_BASE_URL`, `ANTHROPIC_API_KEY`, or `FALLBACK_BASE_URL` + `FALLBACK_API_KEY` must be set.
 
 Frontend (`frontend/.env.local`): `NEXT_PUBLIC_API_URL`, `NEXT_PUBLIC_SITE_URL`.
 

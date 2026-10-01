@@ -18,13 +18,20 @@ type Config struct {
 	Port           string
 	AllowedOrigins []string // CORS allowlist; exact origins, no wildcard
 
-	// AI agent transport (Option A): Hermes relays the Anthropic Messages API.
-	// Tessera owns the tool-calling loop. When Hermes is unset or failing, the
-	// agent falls back to the Anthropic API directly.
-	HermesBaseURL   string
-	HermesToken     string
-	AnthropicAPIKey string
-	Model           string
+	// AI agent transport (Option A): Tessera owns the tool-calling loop and
+	// speaks only the Anthropic Messages API. Backends are tried in order:
+	// Hermes (relay), the provider at AnthropicBaseURL (the Anthropic API when
+	// unset, or any Messages-compatible provider), then an optional second
+	// Messages-compatible provider. The fallback carries its own model id
+	// because providers name the same model differently.
+	HermesBaseURL    string
+	HermesToken      string
+	AnthropicBaseURL string
+	AnthropicAPIKey  string
+	Model            string
+	FallbackBaseURL  string
+	FallbackAPIKey   string
+	FallbackModel    string // defaults to Model
 
 	// Data sources
 	OSOAPIKey   string
@@ -54,13 +61,18 @@ const (
 
 // Load reads configuration from the process environment, applying defaults.
 func Load() *Config {
+	model := getEnv("TESSERA_MODEL", defaultModel)
 	return &Config{
 		Port:               getEnv("PORT", defaultPort),
 		AllowedOrigins:     splitCSV(getEnv("ALLOWED_ORIGINS", defaultAllowedOrigins)),
 		HermesBaseURL:      strings.TrimRight(os.Getenv("HERMES_BASE_URL"), "/"),
 		HermesToken:        os.Getenv("HERMES_TOKEN"),
+		AnthropicBaseURL:   strings.TrimRight(os.Getenv("ANTHROPIC_BASE_URL"), "/"),
 		AnthropicAPIKey:    os.Getenv("ANTHROPIC_API_KEY"),
-		Model:              getEnv("TESSERA_MODEL", defaultModel),
+		Model:              model,
+		FallbackBaseURL:    strings.TrimRight(os.Getenv("FALLBACK_BASE_URL"), "/"),
+		FallbackAPIKey:     os.Getenv("FALLBACK_API_KEY"),
+		FallbackModel:      getEnv("FALLBACK_MODEL", model),
 		OSOAPIKey:          os.Getenv("OSO_API_KEY"),
 		GitHubToken:        os.Getenv("GITHUB_TOKEN"),
 		RateLimitRPS:       getEnvFloat("RATE_LIMIT_RPS", defaultRateLimitRPS),
@@ -74,13 +86,13 @@ func Load() *Config {
 
 // HasAgentBackend reports whether at least one AI backend is configured.
 func (c *Config) HasAgentBackend() bool {
-	return c.HermesBaseURL != "" || c.AnthropicAPIKey != ""
+	return c.HermesBaseURL != "" || c.AnthropicAPIKey != "" || (c.FallbackBaseURL != "" && c.FallbackAPIKey != "")
 }
 
 // Validate returns an error if the configuration is unusable.
 func (c *Config) Validate() error {
 	if !c.HasAgentBackend() {
-		return fmt.Errorf("no AI backend configured: set HERMES_BASE_URL (relay) or ANTHROPIC_API_KEY (fallback)")
+		return fmt.Errorf("no AI backend configured: set HERMES_BASE_URL (relay), ANTHROPIC_API_KEY (+ ANTHROPIC_BASE_URL), or FALLBACK_BASE_URL + FALLBACK_API_KEY")
 	}
 	return nil
 }

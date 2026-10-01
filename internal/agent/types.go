@@ -15,12 +15,18 @@ type Message struct {
 }
 
 // ContentBlock is a single block within a message. The active fields depend on
-// Type: "text", "tool_use", or "tool_result".
+// Type: "text", "tool_use", "tool_result", "thinking", or "redacted_thinking".
 type ContentBlock struct {
 	Type string `json:"type"`
 
 	// Type == "text"
 	Text string `json:"text,omitempty"`
+
+	// Type == "thinking" / "redacted_thinking": reasoning models return these,
+	// and they must be sent back unchanged on the next turn of a tool loop.
+	Thinking  string `json:"thinking,omitempty"`
+	Signature string `json:"signature,omitempty"`
+	Data      string `json:"data,omitempty"`
 
 	// Type == "tool_use"
 	ID    string          `json:"id,omitempty"`

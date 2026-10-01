@@ -210,7 +210,8 @@ func cmdProviders() {
 	if !ai.HasBackend() {
 		fmt.Println("No AI backend configured. Set one of:")
 		fmt.Println("  • HERMES_BASE_URL (+ HERMES_TOKEN) — relay to a real Claude Code Opus 4.8 agent")
-		fmt.Println("  • ANTHROPIC_API_KEY — direct Anthropic API (fallback)")
+		fmt.Println("  • ANTHROPIC_API_KEY (+ ANTHROPIC_BASE_URL) — Anthropic API or any Messages-compatible provider")
+		fmt.Println("  • FALLBACK_BASE_URL + FALLBACK_API_KEY (+ FALLBACK_MODEL) — second Messages-compatible provider")
 		return
 	}
 	fmt.Printf("\n  Model:    %s\n", ai.Model())

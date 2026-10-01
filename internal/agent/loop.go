@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 )
 
@@ -16,7 +17,7 @@ func (c *Client) Run(ctx context.Context, system, task string, emit EventFunc) (
 		emit = func(Event) {}
 	}
 	if !c.HasBackend() {
-		return "", fmt.Errorf("no AI backend configured (set HERMES_BASE_URL or ANTHROPIC_API_KEY)")
+		return "", errNoBackend
 	}
 
 	tools := c.toolList()
@@ -82,8 +83,26 @@ func (c *Client) AnalyzeProject(ctx context.Context, address string, emit EventF
 
 Investigate using your tools: pull its cross-epoch funding history, rank it against peers in its latest epoch, analyze its trust graph (donor diversity, whale dependency, coordination/Sybil risk), simulate how alternative funding mechanisms would change its allocation, and scan its on-chain activity. Cross-reference external signals (OSO, GitHub, forum, RetroPGF) when an identifier is available.
 
-Then write the report in Markdown with these sections: Summary verdict (fund / hold / investigate, with a confidence level), Funding trajectory, Trust & Sybil assessment, Mechanism sensitivity, On-chain & ecosystem signals, Risks & red flags, and Evidence gaps. Ground every claim in tool data; never invent numbers.`, address)
-	return c.Run(ctx, AnalystSystem, task, emit)
+Then write the report in Markdown with these sections: Summary verdict (fund / hold / investigate, with a confidence level), Funding trajectory, Trust & Sybil assessment, Mechanism sensitivity, On-chain & ecosystem signals, Risks & red flags, and Evidence gaps. Ground every claim in tool data; never invent numbers.
+
+`+reportOnly, address)
+	md, err := c.Run(ctx, AnalystSystem, task, emit)
+	return trimToReport(md), err
+}
+
+// reportOnly asks for a final message that is the report alone. Some models
+// narrate their planning as plain text in the final turn.
+const reportOnly = "Your final message must contain only the report: begin it with a top-level Markdown heading, with no planning, commentary, or tool narration before it."
+
+var mdHeading = regexp.MustCompile(`(?m)^#{1,6} `)
+
+// trimToReport drops any narration before the report's first Markdown heading
+// (backstop for reportOnly). Text without a heading is returned unchanged.
+func trimToReport(md string) string {
+	if loc := mdHeading.FindStringIndex(md); loc != nil {
+		return md[loc[0]:]
+	}
+	return md
 }
 
 // EvaluateProposal runs the agent to evaluate a project proposal across eight
@@ -101,6 +120,8 @@ Description: %s
 	} else {
 		b.WriteString("\n")
 	}
-	b.WriteString("Use get_oso_metrics, get_forum_sentiment, and find_in_retropgf where a project name is available. Score each dimension 0-10 with a one-line justification tied to evidence, then give an overall funding recommendation. Do not fabricate metrics; if a signal is unavailable, say so explicitly.")
-	return c.Run(ctx, AnalystSystem, b.String(), emit)
+	b.WriteString("Use get_oso_metrics, get_forum_sentiment, and find_in_retropgf where a project name is available. Score each dimension 0-10 with a one-line justification tied to evidence, then give an overall funding recommendation. Do not fabricate metrics; if a signal is unavailable, say so explicitly.\n\n")
+	b.WriteString(reportOnly)
+	md, err := c.Run(ctx, AnalystSystem, b.String(), emit)
+	return trimToReport(md), err
 }
