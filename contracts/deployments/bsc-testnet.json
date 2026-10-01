@@ -1,0 +1,20 @@
+{
+  "chainId": 97,
+  "network": "bscTestnet",
+  "deployedAt": "2026-09-30",
+  "verifiedOnBscScan": true,
+  "deployer": "0xAEc63F6cEbBfacdC3516992b6ec396147c9c8361",
+  "contract": "TesseraAttestations",
+  "address": "0x56e6472693982df91df33842f1d087f2e4308427",
+  "tx": "0x9138fbd9ee54ea3ae1fffe5834d2b33e8970a5e9b1e476b3a390b28e3782f1fc",
+  "explorer": "https://testnet.bscscan.com/address/0x56e6472693982df91df33842f1d087f2e4308427#code",
+  "note": "Immutable verdict-attestation registry. No owner, no upgrade, no custody. Deploy-and-forget.",
+  "sampleAttestation": {
+    "verdictHash": "0x3fbf9dc117624a1afa0babd0a27ced3a5d247f759eb3e5cf69fa027a18cb1f3a",
+    "riskLevel": "HIGH (2)",
+    "projectId": "octant:ep-23:project-x",
+    "evidenceUri": "https://github.com/TesseraBNB — sample verdict v1",
+    "tx": "0x25bcd9e701072713ace87127e78e12f50bdd25df098328e4708e36bc4e31ee2a",
+    "verdictFile": "sample-verdict.txt"
+  }
+}

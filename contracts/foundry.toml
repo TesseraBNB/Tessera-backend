@@ -1,0 +1,20 @@
+[profile.default]
+src = "src"
+out = "out"
+libs = ["lib"]
+solc_version = "0.8.24"
+optimizer = true
+optimizer_runs = 200
+evm_version = "cancun"
+
+# BNB Chain RPC profiles (public endpoints; see .env.example for overrides)
+[rpc_endpoints]
+bsc_testnet = "${BSC_TESTNET_RPC}"
+bsc = "${BSC_RPC_URL}"
+
+[etherscan]
+# Etherscan V2 unified API — verifies BscScan (chainid 97/56) with one key.
+bsc_testnet = { key = "${ETHERSCAN_API_KEY}", chain = 97, url = "https://api.etherscan.io/v2/api" }
+bsc = { key = "${ETHERSCAN_API_KEY}", chain = 56, url = "https://api.etherscan.io/v2/api" }
+
+# See https://github.com/foundry-rs/foundry/blob/master/crates/config/README.md#all-options

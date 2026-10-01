@@ -1,0 +1,6 @@
+TESSERA VERDICT v1
+project: octant ep-23 project-x
+risk: HIGH
+evidence: whale dependency 0.71, gini 0.83, donor entropy 3.12
+tool calls: 12
+sources: octant API, oso, github
