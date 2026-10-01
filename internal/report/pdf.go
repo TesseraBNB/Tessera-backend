@@ -1,8 +1,6 @@
 package report
 
 import (
-	"bytes"
-	_ "embed"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -11,12 +9,6 @@ import (
 
 	"github.com/go-pdf/fpdf"
 )
-
-//go:embed assets/logo.png
-var logoPNG []byte
-
-//go:embed assets/logo-inverted.png
-var logoInvertedPNG []byte
 
 const (
 	pageW    = 210.0 // A4 width mm
@@ -64,10 +56,6 @@ func GeneratePDF(r *PDFReport) (string, error) {
 	pdf.SetAutoPageBreak(true, marginB+15)
 	pdf.SetMargins(marginL, marginT+15, marginR)
 
-	// Register embedded logo images
-	pdf.RegisterImageOptionsReader("logo", fpdf.ImageOptions{ImageType: "PNG"}, bytes.NewReader(logoPNG))
-	pdf.RegisterImageOptionsReader("logo-inv", fpdf.ImageOptions{ImageType: "PNG"}, bytes.NewReader(logoInvertedPNG))
-
 	// Brand colors: #0C447C (dark), #185FA5 (mid), #378ADD (bright)
 	// Header on every page
 	pdf.SetHeaderFuncMode(func() {
@@ -75,8 +63,8 @@ func GeneratePDF(r *PDFReport) (string, error) {
 		pdf.SetFillColor(12, 68, 124) // #0C447C
 		pdf.Rect(0, 0, pageW, 14, "F")
 
-		// Inverted logo in header (white on dark blue)
-		pdf.ImageOptions("logo-inv", marginL, 1.5, 11, 11, false, fpdf.ImageOptions{ImageType: "PNG"}, 0, "")
+		// Logo in header (the mark carries its own dark tile)
+		drawLogo(pdf, marginL, 1.5, 11)
 
 		pdf.SetY(4)
 		pdf.SetFont("Helvetica", "B", 9)
@@ -115,7 +103,7 @@ func GeneratePDF(r *PDFReport) (string, error) {
 
 		// Small logo in footer
 		footerY := pdf.GetY()
-		pdf.ImageOptions("logo", marginL, footerY, 4, 4, false, fpdf.ImageOptions{ImageType: "PNG"}, 0, "")
+		drawLogo(pdf, marginL, footerY, 4)
 		pdf.SetX(marginL + 5)
 		pdf.SetFont("Helvetica", "", 7)
 		pdf.SetTextColor(12, 68, 124) // #0C447C
@@ -128,7 +116,7 @@ func GeneratePDF(r *PDFReport) (string, error) {
 
 	// Centered logo above title
 	logoSize := 18.0
-	pdf.ImageOptions("logo", marginL+(contentW-logoSize)/2, pdf.GetY(), logoSize, logoSize, false, fpdf.ImageOptions{ImageType: "PNG"}, 0, "")
+	drawLogo(pdf, marginL+(contentW-logoSize)/2, pdf.GetY(), logoSize)
 	pdf.SetY(pdf.GetY() + logoSize + 3)
 
 	// Title
@@ -206,6 +194,46 @@ func GeneratePDF(r *PDFReport) (string, error) {
 		return "", fmt.Errorf("failed to write PDF: %w", err)
 	}
 	return path, nil
+}
+
+// drawLogo draws the Tessera mark from frontend/src/app/icon.svg (a 64-unit
+// grid) as vector shapes, size mm square with its top-left at (x, y). Drawing
+// it avoids a raster asset, which the repo's Git LFS rule for *.png turns into
+// a pointer file that is not a PNG. Fill, draw color and line width are restored.
+func drawLogo(pdf *fpdf.Fpdf, x, y, size float64) {
+	lw := pdf.GetLineWidth()
+	fr, fg, fb := pdf.GetFillColor()
+	dr, dg, db := pdf.GetDrawColor()
+	defer func() {
+		pdf.SetLineWidth(lw)
+		pdf.SetFillColor(fr, fg, fb)
+		pdf.SetDrawColor(dr, dg, db)
+	}()
+
+	u := size / 64 // one SVG unit in mm
+
+	pdf.SetFillColor(10, 12, 14) // #0a0c0e tile
+	pdf.RoundedRect(x, y, 64*u, 64*u, 14*u, "1234", "F")
+	pdf.SetDrawColor(34, 43, 49) // #222b31 hairline
+	pdf.SetLineWidth(u)
+	pdf.RoundedRect(x+0.5*u, y+0.5*u, 63*u, 63*u, 13.5*u, "1234", "D")
+
+	// Four diamonds (half-diagonal 11 units) forming the larger diamond.
+	for _, d := range []struct {
+		cx, cy  float64
+		r, g, b int
+	}{
+		{32, 20, 232, 99, 58},   // #e8633a ember
+		{44, 32, 70, 214, 208},  // #46d6d0 signal
+		{32, 44, 236, 231, 218}, // #ece7da bone
+		{20, 32, 155, 163, 159}, // #9ba39f bone-dim
+	} {
+		cx, cy := x+d.cx*u, y+d.cy*u
+		pdf.SetFillColor(d.r, d.g, d.b)
+		pdf.Polygon([]fpdf.PointType{
+			{X: cx, Y: cy - 11*u}, {X: cx + 11*u, Y: cy}, {X: cx, Y: cy + 11*u}, {X: cx - 11*u, Y: cy},
+		}, "F")
+	}
 }
 
 func drawTableV2(pdf *fpdf.Fpdf, t *PDFTable) {
