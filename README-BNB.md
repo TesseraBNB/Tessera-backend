@@ -84,7 +84,7 @@ Full reference: [`contracts/README.md`](contracts/README.md) · record:
 
 ```
 Browser ── https://tessera-bnb.vercel.app (Next.js 16)
-   │  the page calls http://localhost:8080 from the visitor's own browser
+   │  the page calls the team's demo backend, or http://localhost:8080 on the visitor's machine
    ▼
 Your machine: Go service (go run ./cmd/tessera serve)
    ├─ /api/*         JSON (fast, no LLM)
@@ -106,8 +106,9 @@ endpoint is ever exposed to the network. See
 
 ## Run it locally
 
-The UI is live at **https://tessera-bnb.vercel.app**. It talks to a Tessera backend on
-**your** machine at `http://localhost:8080`, so start the backend and the site lights up.
+The UI is live at **https://tessera-bnb.vercel.app**. It uses the team's demo backend when
+that is up, and otherwise a Tessera backend on **your** machine at `http://localhost:8080` —
+so if the badge says "offline", start the backend and reload.
 
 **1. Backend** (Go ≥ 1.25)
 
@@ -220,7 +221,8 @@ agent can call the same tools. Both transports share one core (`internal/mcp`).
 ## Deploy
 
 - **Frontend → Vercel:** https://tessera-bnb.vercel.app from `TesseraBNB/Tessera-frontend`.
-  With `NEXT_PUBLIC_API_URL` unset it calls `http://localhost:8080` on the visitor's machine.
+  `NEXT_PUBLIC_API_URL` names a preferred backend (e.g. a tunnel to the team's machine); the
+  site falls back to `http://localhost:8080` on the visitor's machine when it does not answer.
 - **Backend:** runs locally (above). It is also container-ready for hosting: `Dockerfile` +
   `railway.toml` (healthcheck `/api/health`). If you host it, set `NEXT_PUBLIC_API_URL` on
   Vercel to its URL and keep the frontend origin in `ALLOWED_ORIGINS`.

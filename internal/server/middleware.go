@@ -64,7 +64,9 @@ func (a *App) cors(next http.Handler) http.Handler {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
 			w.Header().Set("Vary", "Origin")
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+			// ngrok-skip-browser-warning: sent by the frontend when the backend is
+			// reached through an ngrok tunnel (its free plan serves browsers a warning page otherwise).
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, ngrok-skip-browser-warning")
 			// Chrome's Private Network Access preflight: a public site (the
 			// Vercel frontend) calling this server on localhost.
 			if r.Header.Get("Access-Control-Request-Private-Network") == "true" {

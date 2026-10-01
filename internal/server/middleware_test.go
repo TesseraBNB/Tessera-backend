@@ -3,6 +3,7 @@ package server
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/yeheskieltame/tessera/internal/config"
@@ -23,6 +24,9 @@ func TestCORSAllowsListedOriginWithPrivateNetworkPreflight(t *testing.T) {
 	}
 	if got := rec.Header().Get("Access-Control-Allow-Private-Network"); got != "true" {
 		t.Errorf("Allow-Private-Network = %q", got)
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Headers"); !strings.Contains(got, "ngrok-skip-browser-warning") {
+		t.Errorf("Allow-Headers = %q, want the ngrok bypass header", got)
 	}
 	if rec.Code != http.StatusNoContent {
 		t.Errorf("preflight status = %d", rec.Code)
