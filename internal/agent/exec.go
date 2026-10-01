@@ -155,13 +155,98 @@ func (c *Client) buildRegistry() map[string]toolDef {
 			},
 		},
 		{
-			tool: Tool{Name: "get_oso_metrics", Description: "Open Source Observer signals for a project (GitHub code metrics, on-chain activity, funding history) by OSO project name.", InputSchema: schemaProjectName},
+			tool: Tool{Name: "get_oso_metrics", Description: "Open Source Observer signals for a project: all-time GitHub activity (stars, contributors, commits, merged PRs, releases), funding received per source in USD (Gitcoin donations and matching, Octant, Optimism Retro Funding, ...) and its GitHub repos. Give an OSO project name, or a payout/contract address to resolve the project from it.", InputSchema: schemaNameOrAddress},
 			exec: func(ctx context.Context, in json.RawMessage) (string, error) {
-				name, err := stringArg(in, "project_name")
+				a, err := nameOrAddressArgs(in)
 				if err != nil {
 					return "", err
 				}
-				return jsonStr(c.oso.CollectProjectSignals(ctx, name))
+				if a.Address != "" {
+					s, err := c.osoSignalsForAddress(ctx, a.Address)
+					if err != nil {
+						return "", err
+					}
+					if s != nil {
+						return jsonStr(s)
+					}
+					if a.Name == "" {
+						return jsonStr(map[string]any{"found": false, "note": "no OSO project lists this address"})
+					}
+				}
+				return jsonStr(c.oso.CollectProjectSignals(ctx, a.Name))
+			},
+		},
+		{
+			tool: Tool{Name: "find_in_gitcoin", Description: "Cross-ecosystem check against Gitcoin Grants (" + data.GitcoinCoverage + "): has this recipient address received Gitcoin donations or matching, in which rounds, from how many donors, for how much USD. With only a name, returns candidate projects whose names match, which are not proof of identity until the address matches.", InputSchema: schemaNameOrAddress},
+			exec: func(ctx context.Context, in json.RawMessage) (string, error) {
+				a, err := nameOrAddressArgs(in)
+				if err != nil {
+					return "", err
+				}
+				out := map[string]any{"source": data.GitcoinCoverage, "match": "none"}
+				if a.Address != "" {
+					p, err := c.gitcoin.FindByAddress(ctx, a.Address)
+					if err != nil {
+						return "", err
+					}
+					if p != nil {
+						out["match"], out["project"] = "address", p
+						return jsonStr(out)
+					}
+					out["addressResult"] = "this address never received Gitcoin funding"
+				}
+				if a.Name != "" {
+					cands, err := c.gitcoin.SearchByName(ctx, a.Name, 8)
+					if err != nil {
+						return "", err
+					}
+					if len(cands) > 0 {
+						out["match"], out["candidates"] = "name", cands
+						out["note"] = "name matches are candidates only; treat one as the same project only if its recipient address or other evidence confirms it"
+					}
+				}
+				return jsonStr(out)
+			},
+		},
+		{
+			tool: Tool{Name: "get_gitcoin_round", Description: "Gitcoin Grants rounds. Without round: the most recent rounds with totals (donations, unique donors, donated and matched USD), each with a ref. With round (a ref, chainId:roundId): that round's summary and its projects ranked by funding.", InputSchema: schemaGitcoinRound},
+			exec: func(ctx context.Context, in json.RawMessage) (string, error) {
+				var a struct {
+					Round string `json:"round"`
+					Limit int    `json:"limit"`
+				}
+				_ = json.Unmarshal(in, &a)
+				if a.Round == "" {
+					rounds, err := c.gitcoin.Rounds(ctx, a.Limit)
+					if err != nil {
+						return "", err
+					}
+					return jsonStr(map[string]any{"source": data.GitcoinCoverage, "rounds": rounds})
+				}
+				summary, projects, err := c.gitcoin.RoundProjects(ctx, a.Round)
+				if err != nil {
+					return "", err
+				}
+				if len(projects) > 25 {
+					projects = projects[:25]
+				}
+				return jsonStr(map[string]any{"round": summary, "topProjects": projects})
+			},
+		},
+		{
+			tool: Tool{Name: "get_gitcoin_trust_profile", Description: "Trust-graph metrics for a Gitcoin round from its individual donations: donor diversity (Shannon entropy), whale dependency, coordination/Sybil risk (max Jaccard donor overlap with another project in the round). Give an address for one project, or omit it for the round's highest-risk projects.", InputSchema: schemaGitcoinTrust},
+			exec: func(ctx context.Context, in json.RawMessage) (string, error) {
+				var a struct {
+					Round   string `json:"round"`
+					Address string `json:"address"`
+				}
+				if err := json.Unmarshal(in, &a); err != nil {
+					return "", err
+				}
+				if a.Round == "" {
+					return "", fmt.Errorf("round is required: a chainId:roundId reference from get_gitcoin_round or find_in_gitcoin")
+				}
+				return c.gitcoinTrust(ctx, a.Round, a.Address)
 			},
 		},
 		{
@@ -284,6 +369,89 @@ func (c *Client) epochArg(ctx context.Context, in json.RawMessage) (int, error) 
 	return c.octant.GetLatestFundedEpoch(ctx)
 }
 
+type nameOrAddress struct {
+	Name    string
+	Address string
+}
+
+// nameOrAddressArgs reads {"project_name"|"name", "address"}; at least one is required.
+func nameOrAddressArgs(in json.RawMessage) (nameOrAddress, error) {
+	var a struct {
+		ProjectName string `json:"project_name"`
+		Name        string `json:"name"`
+		Address     string `json:"address"`
+	}
+	if err := json.Unmarshal(in, &a); err != nil {
+		return nameOrAddress{}, err
+	}
+	out := nameOrAddress{Name: strings.TrimSpace(a.ProjectName), Address: strings.TrimSpace(a.Address)}
+	if out.Name == "" {
+		out.Name = strings.TrimSpace(a.Name)
+	}
+	if out.Name == "" && out.Address == "" {
+		return out, fmt.Errorf("project_name or address is required")
+	}
+	return out, nil
+}
+
+// osoSignalsForAddress collects the signals of the OSO project that lists addr,
+// or returns nil, nil when no project does.
+func (c *Client) osoSignalsForAddress(ctx context.Context, addr string) (*data.ProjectSignals, error) {
+	project, err := c.gitcoin.OSOProjectForAddress(ctx, addr)
+	if err != nil || project == nil {
+		return nil, err
+	}
+	s, err := c.oso.Signals(ctx, project)
+	if err != nil {
+		return nil, err
+	}
+	s.MatchedBy = "address"
+	return s, nil
+}
+
+// gitcoinTrust builds trust profiles for every project in a Gitcoin round from
+// its individual donations (USD), with the same analysis as Octant epochs.
+func (c *Client) gitcoinTrust(ctx context.Context, round, address string) (string, error) {
+	dons, err := c.gitcoin.RoundDonations(ctx, round)
+	if err != nil {
+		return "", err
+	}
+	if len(dons) == 0 {
+		return "", fmt.Errorf("no individual donations found for Gitcoin round %s", round)
+	}
+	projects := make([]string, len(dons))
+	donors := make([]string, len(dons))
+	amounts := make([]float64, len(dons))
+	names := map[string]string{}
+	for i, d := range dons {
+		projects[i], donors[i], amounts[i] = d.Recipient, d.Donor, d.AmountUSD
+		names[d.Recipient] = d.Project
+	}
+	profiles := analysis.BuildTrustProfiles(projects, amounts, donors, nil)
+	type named struct {
+		Name string `json:"name"`
+		analysis.TrustProfile
+	}
+	summary := map[string]any{"ref": round, "donations": len(dons), "projects": len(profiles)}
+	if address != "" {
+		for _, p := range profiles {
+			if strings.EqualFold(p.Address, address) {
+				return jsonStr(map[string]any{"round": summary, "profile": named{names[p.Address], p}})
+			}
+		}
+		return "", fmt.Errorf("address %s received no individual donations in Gitcoin round %s", address, round)
+	}
+	sort.Slice(profiles, func(i, j int) bool { return profiles[i].CoordinationRisk > profiles[j].CoordinationRisk })
+	if len(profiles) > 25 {
+		profiles = profiles[:25]
+	}
+	top := make([]named, len(profiles))
+	for i, p := range profiles {
+		top[i] = named{names[p.Address], p}
+	}
+	return jsonStr(map[string]any{"round": summary, "highestCoordinationRisk": top})
+}
+
 func stringArg(in json.RawMessage, key string) (string, error) {
 	m := map[string]string{}
 	if err := json.Unmarshal(in, &m); err != nil {
@@ -314,4 +482,7 @@ var (
 	schemaProjectName       = json.RawMessage(`{"type":"object","properties":{"project_name":{"type":"string","description":"Project name"}},"required":["project_name"]}`)
 	schemaOwnerRepo         = json.RawMessage(`{"type":"object","properties":{"owner":{"type":"string"},"repo":{"type":"string"}},"required":["owner","repo"]}`)
 	schemaRetro             = json.RawMessage(`{"type":"object","properties":{"name":{"type":"string"},"address":{"type":"string"},"github_url":{"type":"string"}},"required":["name"]}`)
+	schemaNameOrAddress     = json.RawMessage(`{"type":"object","properties":{"project_name":{"type":"string","description":"Project name"},"address":{"type":"string","description":"Payout or contract address, 0x-prefixed (exact match, preferred)"}}}`)
+	schemaGitcoinRound      = json.RawMessage(`{"type":"object","properties":{"round":{"type":"string","description":"Round ref chainId:roundId (e.g. 42161:867); omit to list recent rounds"},"limit":{"type":"integer","description":"How many recent rounds to list (default 50, max 100)"}}}`)
+	schemaGitcoinTrust      = json.RawMessage(`{"type":"object","properties":{"round":{"type":"string","description":"Round ref chainId:roundId (e.g. 42161:867)"},"address":{"type":"string","description":"Project recipient address; omit for the round's highest-risk projects"}},"required":["round"]}`)
 )

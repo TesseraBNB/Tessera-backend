@@ -20,8 +20,13 @@ is invented.
   whale dependency surface Sybil/coordination risk.
 - **Mechanism simulation** — replays an epoch under Standard / Capped / Equal / Trust-weighted
   QF with Gini and top-share.
-- **Cross-ecosystem validation** — corroborates against OSO, GitHub, the Octant forum, and
-  Optimism RetroPGF.
+- **Cross-ecosystem validation** — identifies a project by its payout address in Gitcoin and
+  Open Source Observer (name, repos, funding from every source), then corroborates against
+  GitHub, the Octant forum, and Optimism RetroPGF.
+- **Gitcoin Grants** — looks a project's payout address up in Gitcoin's history (rounds,
+  unique donors, USD donated and matched) and runs the same trust-graph forensics on any
+  Gitcoin round. Data comes from Open Source Observer's Gitcoin dataset, 2019 to GG23
+  (May 2025); Gitcoin's own indexer went offline when Grants Stack shut down.
 
 **BNB Chain edition:** the on-chain scanner is BNB-first (BSC 56, opBNB 204, BSC testnet 97),
 and verdicts can be notarized on BSC testnet by `TesseraAttestations`
@@ -82,7 +87,8 @@ pnpm install && pnpm dev      # → http://localhost:3000 (API defaults to http:
 **Without an AI key** the server still runs: Explore (epoch ranking + anomaly detection),
 the `/api/*` analytics, `scan-chain` and the MCP tools all work; the agent endpoints answer
 503 until a key is set. Octant's allocation rounds have data for epochs 1–10 (Tessera
-defaults to the latest funded epoch).
+defaults to the latest funded epoch). Gitcoin history and OSO signals need `OSO_API_KEY`;
+without it those tools report the gap instead of failing the run.
 
 `.env.example` is preset for xKiro with `qwen/qwen3.8-omni-flash:free`. For Claude directly,
 clear `ANTHROPIC_BASE_URL`, use an Anthropic key and `TESSERA_MODEL=claude-opus-4-8`.
@@ -100,7 +106,8 @@ Backend (`.env`):
 | `TESSERA_MODEL` | Agent model (`.env.example`: `qwen/qwen3.8-omni-flash:free`) | `claude-opus-4-8` |
 | `PORT` | HTTP port | `8080` |
 | `ALLOWED_ORIGINS` | CORS allowlist (CSV) | `http://localhost:3000,https://tessera-bnb.vercel.app` |
-| `OSO_API_KEY`, `GITHUB_TOKEN` | Enrich cross-referencing | — |
+| `OSO_API_KEY` | Open Source Observer SQL API key (free: https://www.oso.xyz → Settings → API Keys). Enables Gitcoin history and OSO project signals | — |
+| `GITHUB_TOKEN` | Higher GitHub API rate limit | — |
 | `RATE_LIMIT_RPS` / `RATE_LIMIT_BURST` | Per-IP rate limit | `1` / `5` |
 | `AGENT_MAX_ITERATIONS` | Max tool-use rounds per run | `12` |
 | `AGENT_DAILY_BUDGET` | Global agent runs/day, 0 = unlimited | `0` |
@@ -135,12 +142,13 @@ go build -o tessera ./cmd/tessera/
 ./tessera trust-graph -e 5            # trust-graph metrics
 ./tessera simulate -e 5               # mechanism comparison
 ./tessera scan-chain <0xaddr>         # 11-chain on-chain scan (BNB Chain + EVM L1/L2s)
+./tessera gitcoin-rounds [-r 42161:865]  # Gitcoin rounds, or one round's projects (needs OSO_API_KEY)
 ./tessera status                      # connectivity + agent backends
 ```
 
 ## Use Tessera as an MCP server
 
-Expose Tessera's ten tools to any MCP-aware agent (e.g. **Claude Code**) — no API
+Expose Tessera's thirteen tools to any MCP-aware agent (e.g. **Claude Code**) — no API
 key required, since the reasoning happens on the client side and the tools run in-process.
 
 ```bash
@@ -179,7 +187,7 @@ internal/
   agent/            tool-calling loop, Messages API transport + fallback, tool registry
   analysis/         deterministic analytics (scoring, trust graph, mechanisms)
   config/           typed env configuration
-  data/             upstream clients (Octant, OSO, GitHub, Discourse, RetroPGF, chains) + cache/retry
+  data/             upstream clients (Octant, OSO SQL + Gitcoin, GitHub, Discourse, RetroPGF, chains) + cache/retry
   ethunit/          wei→ETH (leaf, shared)
   report/           Markdown + branded PDF generation
   server/           HTTP API: app, middleware, SSE, handlers

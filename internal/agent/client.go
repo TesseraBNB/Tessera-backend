@@ -36,6 +36,7 @@ type Client struct {
 	octant     *data.OctantClient
 	blockchain *data.BlockchainClient
 	oso        *data.OSOClient
+	gitcoin    *data.GitcoinClient
 	github     *data.GitHubClient
 	discourse  *data.DiscourseClient
 	retropgf   *data.RetroPGFClient
@@ -43,12 +44,14 @@ type Client struct {
 
 // New constructs a Client from configuration.
 func New(cfg *config.Config) *Client {
+	oso := data.NewOSOClient(cfg.OSOAPIKey)
 	c := &Client{
 		cfg:        cfg,
 		http:       &http.Client{Timeout: 5 * time.Minute},
 		octant:     data.NewOctantClient(),
 		blockchain: data.NewBlockchainClient(),
-		oso:        data.NewOSOClient(),
+		oso:        oso,
+		gitcoin:    data.NewGitcoinClient(oso),
 		github:     data.NewGitHubClient(),
 		discourse:  data.NewOctantDiscourseClient(),
 		retropgf:   data.NewRetroPGFClient(),

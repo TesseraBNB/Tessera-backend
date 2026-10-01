@@ -129,17 +129,17 @@ func BuildFreshnessReport(
 		}
 	}
 
-	// OSO: metrics have ~24h indexing lag
+	// OSO: metrics are daily snapshots; AsOf carries the snapshot date
 	if osoSignals != nil {
+		snapshot := now.Add(-24 * time.Hour)
+		if t, err := time.Parse("2006-01-02", osoSignals.AsOf); err == nil {
+			snapshot = t
+		}
 		if osoSignals.Code != nil {
-			// OSO code metrics are daily snapshots, ~24h lag
-			addSignal("OSO", "Code activity metrics (stars, commits, contributors)", now.Add(-24*time.Hour), 24)
+			addSignal("OSO", "Code activity metrics (stars, commits, contributors)", snapshot, 24)
 		}
-		if osoSignals.Onchain != nil {
-			addSignal("OSO", "On-chain metrics (txs, gas, users)", now.Add(-24*time.Hour), 24)
-		}
-		if osoSignals.Funding != nil {
-			addSignal("OSO", "Funding metrics", now.Add(-48*time.Hour), 48)
+		if len(osoSignals.FundingUSD) > 0 {
+			addSignal("OSO", "Funding by source (Gitcoin, Octant, Optimism, ...)", snapshot, 24)
 		}
 	}
 

@@ -135,9 +135,15 @@ func AssessGaps(signals *CollectedSignals) []SignalGap {
 	return gaps
 }
 
+// Sources are the upstream clients adaptive collection may query.
+type Sources struct {
+	OSO     *data.OSOClient
+	Gitcoin *data.GitcoinClient
+}
+
 // AdaptiveCollect attempts to fill identified signal gaps by collecting additional data.
 // It runs up to maxIterations rounds: assess → collect → re-assess.
-func AdaptiveCollect(ctx context.Context, signals *CollectedSignals, maxIterations int) *AdaptiveResult {
+func AdaptiveCollect(ctx context.Context, src Sources, signals *CollectedSignals, maxIterations int) *AdaptiveResult {
 	result := &AdaptiveResult{}
 
 	for iter := 0; iter < maxIterations; iter++ {
@@ -161,7 +167,7 @@ func AdaptiveCollect(ctx context.Context, signals *CollectedSignals, maxIteratio
 
 			switch gap.Source {
 			case "oso":
-				if tryFillOSO(ctx, signals, result) {
+				if tryFillOSO(ctx, src, signals, result) {
 					filled = true
 				}
 			case "github":
@@ -169,7 +175,7 @@ func AdaptiveCollect(ctx context.Context, signals *CollectedSignals, maxIteratio
 					filled = true
 				}
 			case "gitcoin":
-				if tryFillGitcoin(ctx, signals, result) {
+				if tryFillGitcoin(ctx, src, signals, result) {
 					filled = true
 				}
 			default:
@@ -202,55 +208,48 @@ func AdaptiveCollect(ctx context.Context, signals *CollectedSignals, maxIteratio
 	return result
 }
 
-// tryFillOSO attempts to discover and collect OSO data for the project.
-func tryFillOSO(ctx context.Context, signals *CollectedSignals, result *AdaptiveResult) bool {
-	if signals.HasOSO {
+// tryFillOSO resolves the project in Open Source Observer, from its address or
+// its GitHub repository, and collects its signals.
+func tryFillOSO(ctx context.Context, src Sources, signals *CollectedSignals, result *AdaptiveResult) bool {
+	if signals.HasOSO || src.OSO == nil || !src.OSO.Enabled() {
 		return false
 	}
 
-	oso := data.NewOSOClient()
-
-	// Strategy 1: Search OSO by address (last 8 chars as keyword)
-	searchTerms := []string{}
-	if signals.Address != "" {
-		// Try common project name patterns from the address
-		addr := strings.ToLower(signals.Address)
-		if len(addr) > 6 {
-			searchTerms = append(searchTerms, addr[2:10]) // first 8 hex chars after 0x
+	var project *data.OSOProject
+	how := ""
+	if signals.Address != "" && src.Gitcoin != nil {
+		if p, err := src.Gitcoin.OSOProjectForAddress(ctx, signals.Address); err == nil && p != nil {
+			project, how = p, "its address"
 		}
 	}
-
-	// Strategy 2: If we have GitHub data, use the repo name
-	if signals.GitHubURL != "" {
-		owner, repo, err := data.ParseGitHubURL(signals.GitHubURL)
-		if err == nil {
-			searchTerms = append([]string{repo, owner}, searchTerms...)
-		}
-	}
-
-	for _, term := range searchTerms {
-		projects, err := oso.SearchProjects(ctx, term, 5)
-		if err != nil || len(projects) == 0 {
-			continue
-		}
-
-		// Try each matching project
-		for _, proj := range projects {
-			s := oso.CollectProjectSignals(ctx, proj.ProjectName)
-			formatted := s.FormatSignals()
-			if formatted != "No OSO data available for this project." {
-				signals.HasOSO = true
-				signals.OSOMetrics = formatted
-				signals.OSOName = proj.ProjectName
-				result.ExtraOSO = formatted
-				result.GapsFilled = append(result.GapsFilled,
-					fmt.Sprintf("Discovered OSO project '%s' via search term '%s'", proj.ProjectName, term))
-				return true
+	if project == nil && signals.GitHubURL != "" {
+		if owner, repo, err := data.ParseGitHubURL(signals.GitHubURL); err == nil {
+			for _, term := range []string{repo, owner} {
+				if p, _, err := src.OSO.FindProject(ctx, term); err == nil && p != nil {
+					project, how = p, fmt.Sprintf("GitHub name '%s'", term)
+					break
+				}
 			}
 		}
 	}
+	if project == nil {
+		return false
+	}
 
-	return false
+	s, err := src.OSO.Signals(ctx, project)
+	if err != nil {
+		return false
+	}
+	formatted := s.FormatSignals()
+	if formatted == "No OSO data available for this project." {
+		return false
+	}
+	signals.HasOSO = true
+	signals.OSOMetrics = formatted
+	signals.OSOName = project.Name
+	result.ExtraOSO = formatted
+	result.GapsFilled = append(result.GapsFilled, fmt.Sprintf("Discovered OSO project '%s' via %s", project.Name, how))
+	return true
 }
 
 // tryFillGitHub attempts to discover GitHub repo from OSO data or other signals.
@@ -289,39 +288,20 @@ func tryFillGitHub(ctx context.Context, signals *CollectedSignals, result *Adapt
 	return false
 }
 
-// tryFillGitcoin attempts to find the project in Gitcoin Grants.
-func tryFillGitcoin(ctx context.Context, signals *CollectedSignals, result *AdaptiveResult) bool {
-	gc := data.NewGitcoinClient()
-
-	// Check recent rounds on Ethereum mainnet and common L2s
-	chainIDs := []int{1, 42161, 10} // Ethereum, Arbitrum, Optimism
-	for _, chainID := range chainIDs {
-		rounds, err := gc.GetRounds(ctx, chainID, 5)
-		if err != nil || len(rounds) == 0 {
-			continue
-		}
-
-		for _, round := range rounds {
-			apps, err := gc.GetRoundProjects(ctx, round.ID, chainID)
-			if err != nil {
-				continue
-			}
-
-			for _, app := range apps {
-				// Check if any application metadata contains our address
-				metaStr := string(app.Metadata)
-				if strings.Contains(strings.ToLower(metaStr), strings.ToLower(signals.Address)) {
-					info := fmt.Sprintf("Found in Gitcoin round %s (chain %d): %d donations, %d unique donors, $%.2f total",
-						round.ID, chainID, app.TotalDonationsCount, app.UniqueDonorsCount, app.TotalAmountDonatedInUsd)
-					result.ExtraGitcoin = info
-					result.GapsFilled = append(result.GapsFilled, "Cross-referenced with Gitcoin Grants: "+info)
-					return true
-				}
-			}
-		}
+// tryFillGitcoin looks the project's address up in Gitcoin Grants.
+func tryFillGitcoin(ctx context.Context, src Sources, signals *CollectedSignals, result *AdaptiveResult) bool {
+	if signals.Address == "" || src.Gitcoin == nil || src.OSO == nil || !src.OSO.Enabled() {
+		return false
 	}
-
-	return false
+	p, err := src.Gitcoin.FindByAddress(ctx, signals.Address)
+	if err != nil || p == nil {
+		return false
+	}
+	info := fmt.Sprintf("Found in Gitcoin Grants as '%s': %d rounds, %d unique donors, $%.0f donated + $%.0f matched",
+		p.Name, p.RoundCount, p.UniqueDonors, p.DonatedUSD, p.MatchedUSD)
+	result.ExtraGitcoin = info
+	result.GapsFilled = append(result.GapsFilled, "Cross-referenced with Gitcoin Grants: "+info)
+	return true
 }
 
 // FormatAdaptiveResult produces a markdown summary of the adaptive collection.

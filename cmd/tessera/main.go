@@ -96,9 +96,8 @@ COMMANDS:
     -c <context>        Additional context (optional)
   detect-anomalies    Detect funding anomalies in donation patterns
     -e <epoch>          Epoch number (required)
-  gitcoin-rounds      Analyze a Gitcoin Grants round
-    -r <round-id>       Round ID (required)
-    --chain <id>        Chain ID (default: 1)
+  gitcoin-rounds      Gitcoin Grants rounds via Open Source Observer (needs OSO_API_KEY)
+    -r <chain:round>    Show one round's projects, e.g. -r 42161:867 (omit to list recent rounds)
   extract-metrics     Extract impact metrics from text using AI
     <text>              Text to analyze (required)
   trust-graph         Analyze donor trust graph for an epoch
@@ -161,20 +160,17 @@ func cmdStatus(ctx context.Context) {
 		fmt.Fprintf(w, "  Octant API\t✓ epoch %d\n", ep.CurrentEpoch)
 	}
 
-	// Gitcoin
-	gitcoin := data.NewGitcoinClient()
-	if rounds, err := gitcoin.GetRounds(ctx, 1, 1); err != nil {
-		fmt.Fprintf(w, "  Gitcoin GraphQL\t✗ %v\n", err)
+	// OSO, and Gitcoin through it
+	src := osoSources()
+	if _, err := src.OSO.Query(ctx, "SELECT 1"); err != nil {
+		fmt.Fprintf(w, "  OSO SQL API\t✗ %v\n", err)
 	} else {
-		fmt.Fprintf(w, "  Gitcoin GraphQL\t✓ %d rounds\n", len(rounds))
+		fmt.Fprintf(w, "  OSO SQL API\t✓ connected\n")
 	}
-
-	// OSO
-	oso := data.NewOSOClient()
-	if _, err := oso.GetProjects(ctx, 1); err != nil {
-		fmt.Fprintf(w, "  OSO API\t✗ %v\n", err)
-	} else {
-		fmt.Fprintf(w, "  OSO API\t✓ connected\n")
+	if rounds, err := src.Gitcoin.Rounds(ctx, 1); err != nil {
+		fmt.Fprintf(w, "  Gitcoin (via OSO)\t✗ %v\n", err)
+	} else if len(rounds) > 0 {
+		fmt.Fprintf(w, "  Gitcoin (via OSO)\t✓ latest round: %s\n", rounds[0].RoundName)
 	}
 
 	// Blockchain
@@ -462,41 +458,50 @@ func cmdDetectAnomalies(ctx context.Context) {
 // --- gitcoin-rounds ---
 
 func cmdGitcoinRounds(ctx context.Context) {
-	roundID := flagString("-r", 0)
-	chainID := flagInt("--chain", 1)
-
-	if roundID == "" {
-		fmt.Fprintln(os.Stderr, "Usage: analyst gitcoin-rounds -r <round-id> [--chain <id>]")
-		os.Exit(1)
-	}
-
-	gitcoin := data.NewGitcoinClient()
-	projects, err := gitcoin.GetRoundProjects(ctx, roundID, chainID)
-	exitOnErr(err)
-
-	sort.Slice(projects, func(i, j int) bool {
-		return projects[i].TotalAmountDonatedInUsd > projects[j].TotalAmountDonatedInUsd
-	})
-
-	fmt.Printf("\nGitcoin Round — %d approved projects\n\n", len(projects))
-
+	gitcoin := osoSources().Gitcoin
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "  #\tPROJECT ID\tDONORS\tDONATED (USD)")
-	fmt.Fprintln(w, "  -\t----------\t------\t-------------")
-	limit := 20
-	if len(projects) < limit {
-		limit = len(projects)
-	}
-	for i := 0; i < limit; i++ {
-		p := projects[i]
-		pid := p.ProjectID
-		if len(pid) > 20 {
-			pid = pid[:20] + "..."
+
+	roundID := flagString("-r", 0)
+	if roundID == "" {
+		rounds, err := gitcoin.Rounds(ctx, 20)
+		exitOnErr(err)
+		fmt.Printf("\nGitcoin rounds — most recent first (%s)\n\n", data.GitcoinCoverage)
+		fmt.Fprintln(w, "  ROUND\tNAME\tCHAIN\tDONORS\tDONATED (USD)\tMATCHED (USD)")
+		for _, r := range rounds {
+			fmt.Fprintf(w, "  %s\t%s\t%s\t%d\t$%.0f\t$%.0f\n", truncate(r.Ref, 28), truncate(r.RoundName, 40), r.Chain, r.UniqueDonors, r.DonatedUSD, r.MatchedUSD)
 		}
-		fmt.Fprintf(w, "  %d\t%s\t%d\t$%.2f\n", i+1, pid, p.UniqueDonorsCount, p.TotalAmountDonatedInUsd)
+		w.Flush()
+		fmt.Println("\nShow a round's projects with: tessera gitcoin-rounds -r <chain:round>")
+		return
+	}
+
+	round, projects, err := gitcoin.RoundProjects(ctx, roundID)
+	exitOnErr(err)
+	fmt.Printf("\n%s — %d projects, %d donations from %d donors, $%.0f donated + $%.0f matched\n\n",
+		round.RoundName, round.Projects, round.Donations, round.UniqueDonors, round.DonatedUSD, round.MatchedUSD)
+	fmt.Fprintln(w, "  #\tPROJECT\tRECIPIENT\tDONORS\tDONATED (USD)\tMATCHED (USD)")
+	for i, p := range projects {
+		if i == 20 {
+			break
+		}
+		fmt.Fprintf(w, "  %d\t%s\t%s\t%d\t$%.0f\t$%.0f\n", i+1, truncate(p.Name, 36), p.RecipientAddress, p.UniqueDonors, p.DonatedUSD, p.MatchedUSD)
 	}
 	w.Flush()
 	fmt.Println()
+}
+
+// osoSources builds the Open Source Observer client (and Gitcoin on top of it)
+// from configuration.
+func osoSources() analysis.Sources {
+	oso := data.NewOSOClient(config.Load().OSOAPIKey)
+	return analysis.Sources{OSO: oso, Gitcoin: data.NewGitcoinClient(oso)}
+}
+
+func truncate(s string, n int) string {
+	if r := []rune(s); len(r) > n {
+		return string(r[:n-1]) + "…"
+	}
+	return s
 }
 
 // --- extract-metrics ---
@@ -714,7 +719,7 @@ func cmdDeepEval(ctx context.Context) {
 	osoMetrics := ""
 	osoName := flagString("-n", 0)
 	if osoName != "" {
-		oso := data.NewOSOClient()
+		oso := osoSources().OSO
 		signals := oso.CollectProjectSignals(ctx, osoName)
 		osoMetrics = signals.FormatSignals()
 		if osoMetrics != "" && osoMetrics != "No OSO data available for this project." {
@@ -1166,7 +1171,7 @@ func cmdAnalyzeProject(ctx context.Context) {
 	osoMetrics := ""
 	if osoName != "" {
 		fmt.Printf("\n[6/7] Collecting OSO signals (%s)...\n", osoName)
-		oso := data.NewOSOClient()
+		oso := osoSources().OSO
 		signals := oso.CollectProjectSignals(ctx, osoName)
 		osoMetrics = signals.FormatSignals()
 		if osoMetrics != "No OSO data available for this project." {
@@ -1196,7 +1201,7 @@ func cmdAnalyzeProject(ctx context.Context) {
 		AnomalyCount:  0,
 		OSOName:       osoName,
 	}
-	adaptiveResult := analysis.AdaptiveCollect(ctx, collectedSignals, 2)
+	adaptiveResult := analysis.AdaptiveCollect(ctx, osoSources(), collectedSignals, 2)
 	if len(adaptiveResult.GapsFilled) > 0 {
 		fmt.Printf("  Gaps filled (%d):\n", len(adaptiveResult.GapsFilled))
 		for _, g := range adaptiveResult.GapsFilled {
@@ -1479,7 +1484,7 @@ func cmdCollectSignals(ctx context.Context) {
 	var allSignals string
 
 	// Try OSO first
-	oso := data.NewOSOClient()
+	oso := osoSources().OSO
 	fmt.Printf("Collecting OSO signals for: %s\n", projectName)
 	osoSignals := oso.CollectProjectSignals(ctx, projectName)
 	osoFormatted := osoSignals.FormatSignals()

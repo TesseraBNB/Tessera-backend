@@ -61,6 +61,12 @@ LLM evaluators live in `analysis` and used to depend on the provider layer. To k
   jitter, retrying network errors / 429 / 5xx and surfacing 4xx immediately.
 - `cache.go` — small TTL cache; the Octant client caches per-endpoint responses
   (`CACHE_TTL`), since closed-epoch data is immutable.
+- `oso.go` — Open Source Observer over its async SQL API (`api.oso.xyz/v1/async-sql`,
+  Trino): submit, poll, download the JSON-lines result, cache it for an hour. Every value
+  that reaches a query is validated first (addresses, names, `chainId:roundId` refs).
+- `gitcoin.go` — Gitcoin Grants history from OSO's `int_events__gitcoin_funding` (every
+  donation and matching payout, 2019 to May 2025), plus address → OSO project resolution
+  (Gitcoin's recipient mapping first, OSO's artifact registry as the slow fallback).
 - Concurrency — `GetProjectHistory` fans out across epochs with bounded goroutines instead
   of a sequential loop.
 - `ethunit` — single wei→ETH implementation shared by `data` and `analysis` (a leaf package,

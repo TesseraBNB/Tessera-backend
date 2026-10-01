@@ -49,37 +49,31 @@ func CrossVerifySignals(
 ) *CorroborationReport {
 	report := &CorroborationReport{}
 
-	// Check 1: OSO contributors vs GitHub contributors
+	// Check 1: OSO contributors (all repos, all time) vs GitHub's top-30 list for one repo.
+	// OSO should cover at least as many people; a much smaller count means the
+	// OSO project and the repo are probably not the same thing.
 	if osoSignals != nil && osoSignals.Code != nil && githubSignals != nil && githubSignals.Repo != nil {
-		osoContribs := osoSignals.Code.ContributorCount
-		ghContribs := float64(len(githubSignals.Contributors))
-		if ghContribs == 0 && githubSignals.Repo != nil {
-			ghContribs = 1 // at minimum the repo exists
-		}
-
-		ratio := 1.0
-		if ghContribs > 0 {
-			ratio = osoContribs / ghContribs
-		}
+		osoContribs := osoSignals.Code.Contributors
+		ghContribs := math.Max(float64(len(githubSignals.Contributors)), 1)
+		ratio := osoContribs / ghContribs
 
 		verdict := VerdictConfirmed
-		explanation := fmt.Sprintf("OSO reports %.0f contributors, GitHub shows %.0f (ratio: %.2f)", osoContribs, ghContribs, ratio)
+		explanation := fmt.Sprintf("OSO counts %.0f contributors across the project's repos; GitHub lists %.0f on this repo (ratio %.2f)", osoContribs, ghContribs, ratio)
 		severity := "low"
-
-		if ratio > 2.0 || ratio < 0.5 {
+		if ratio < 0.4 {
 			verdict = VerdictConflicting
-			explanation += " — significant discrepancy, may indicate different counting methods or data staleness"
+			explanation += " — OSO sees far fewer people than this one repo has, the two may be different projects"
 			severity = "medium"
-		} else if ratio > 1.3 || ratio < 0.7 {
+		} else if ratio < 0.7 {
 			verdict = VerdictPartial
-			explanation += " — minor discrepancy, likely different time windows"
+			explanation += " — OSO has somewhat fewer, likely an indexing lag"
 		}
 
 		report.Checks = append(report.Checks, CorroborationCheck{
 			Claim:       "Contributor count",
-			SourceA:     "OSO (Open Source Observer)",
+			SourceA:     "OSO (all repos, all time)",
 			ValueA:      fmt.Sprintf("%.0f contributors", osoContribs),
-			SourceB:     "GitHub API (top 30)",
+			SourceB:     "GitHub API (top 30, one repo)",
 			ValueB:      fmt.Sprintf("%.0f contributors", ghContribs),
 			Verdict:     verdict,
 			Explanation: explanation,
@@ -87,69 +81,29 @@ func CrossVerifySignals(
 		})
 	}
 
-	// Check 2: OSO stars vs GitHub stars
+	// Check 2: OSO stars (summed over the project's repos) vs this repo's stars.
 	if osoSignals != nil && osoSignals.Code != nil && githubSignals != nil && githubSignals.Repo != nil {
-		osoStars := osoSignals.Code.StarCount
+		osoStars := osoSignals.Code.Stars
 		ghStars := float64(githubSignals.Repo.Stars)
 
 		verdict := VerdictConfirmed
-		explanation := fmt.Sprintf("OSO: %.0f stars, GitHub: %.0f stars", osoStars, ghStars)
+		explanation := fmt.Sprintf("OSO: %.0f stars across %.0f repos, GitHub: %.0f on this repo", osoStars, osoSignals.Code.Repositories, ghStars)
 		severity := "low"
-
-		diff := math.Abs(osoStars - ghStars)
-		maxStars := math.Max(osoStars, ghStars)
-		if maxStars > 0 && diff/maxStars > 0.2 {
-			verdict = VerdictPartial
-			explanation += " — difference suggests OSO data may be stale (24h+ indexing lag)"
-			severity = "low"
-		}
-		if maxStars > 0 && diff/maxStars > 0.5 {
+		if ghStars > 0 && osoStars < ghStars*0.5 {
 			verdict = VerdictConflicting
-			explanation += " — major discrepancy, investigate data freshness"
+			explanation += " — the project total is below one repo's count, investigate the mapping or data freshness"
 			severity = "medium"
+		} else if ghStars > 0 && osoStars < ghStars*0.8 {
+			verdict = VerdictPartial
+			explanation += " — OSO slightly behind, likely indexing lag"
 		}
 
 		report.Checks = append(report.Checks, CorroborationCheck{
 			Claim:       "Repository star count",
-			SourceA:     "OSO (Open Source Observer)",
+			SourceA:     "OSO (all repos)",
 			ValueA:      fmt.Sprintf("%.0f stars", osoStars),
 			SourceB:     "GitHub API (real-time)",
 			ValueB:      fmt.Sprintf("%d stars", githubSignals.Repo.Stars),
-			Verdict:     verdict,
-			Explanation: explanation,
-			Severity:    severity,
-		})
-	}
-
-	// Check 3: On-chain activity (OSO) vs blockchain scan
-	if osoSignals != nil && osoSignals.Onchain != nil && chain != nil {
-		osoTxs := osoSignals.Onchain.TransactionCount6Months
-		chainTxs := float64(chain.TotalTxCount)
-
-		verdict := VerdictConfirmed
-		explanation := fmt.Sprintf("OSO (6mo): %.0f txs, Blockchain scan (all-time): %d txs", osoTxs, chain.TotalTxCount)
-		severity := "medium"
-
-		// Chain scan is nonce (all-time), OSO is 6mo — so chain >= OSO is expected
-		if chainTxs > 0 && osoTxs > chainTxs*1.5 {
-			verdict = VerdictConflicting
-			explanation += " — OSO reports more 6mo transactions than all-time nonce count, data integrity issue"
-			severity = "high"
-		} else if chainTxs == 0 && osoTxs > 0 {
-			verdict = VerdictConflicting
-			explanation += " — OSO shows activity but blockchain scan shows zero txs, possible different addresses"
-			severity = "high"
-		} else if chainTxs > 0 && osoTxs == 0 {
-			verdict = VerdictPartial
-			explanation += " — blockchain shows activity but OSO has no data, project may not be indexed"
-		}
-
-		report.Checks = append(report.Checks, CorroborationCheck{
-			Claim:       "On-chain transaction activity",
-			SourceA:     "OSO (6mo aggregate)",
-			ValueA:      fmt.Sprintf("%.0f transactions", osoTxs),
-			SourceB:     "Blockchain RPC (nonce/all-time)",
-			ValueB:      fmt.Sprintf("%d transactions across %d chains", chain.TotalTxCount, chain.TotalChainsActive),
 			Verdict:     verdict,
 			Explanation: explanation,
 			Severity:    severity,
@@ -219,38 +173,34 @@ func CrossVerifySignals(
 		})
 	}
 
-	// Check 6: OSO funding vs Octant funding cross-reference
-	if osoSignals != nil && osoSignals.Funding != nil && len(history) > 0 {
-		osoFunding := osoSignals.Funding.TotalFundingReceivedUSD
-		var totalOctantETH float64
+	// Check 6: Octant funding as OSO records it (USD) vs Octant's own history (ETH).
+	// The implied ETH price should be plausible; otherwise one side is missing epochs.
+	if osoSignals != nil && osoSignals.FundingUSD["OCTANT"] > 0 && len(history) > 0 {
+		osoOctant := osoSignals.FundingUSD["OCTANT"]
+		var octantETH float64
 		for _, h := range history {
-			totalOctantETH += h.Allocated + h.Matched
+			octantETH += h.Allocated + h.Matched
 		}
-		// Rough ETH→USD at ~$2000 for comparison
-		octantUSD := totalOctantETH * 2000
 
 		verdict := VerdictConfirmed
-		explanation := fmt.Sprintf("OSO reports $%.0f (6mo, cross-platform), Octant ~$%.0f (at $2000/ETH est.)", osoFunding, octantUSD)
-		severity := "medium"
-
-		if osoFunding > 0 && octantUSD > 0 {
-			if osoFunding > octantUSD*3 {
-				verdict = VerdictPartial
-				explanation += " — OSO shows more funding than Octant alone, consistent with multi-platform funding"
-			}
-			if octantUSD > osoFunding*2 && osoFunding > 0 {
+		severity := "low"
+		explanation := fmt.Sprintf("OSO records $%.0f from Octant; the Octant API shows %.2f ETH", osoOctant, octantETH)
+		if octantETH > 0 {
+			implied := osoOctant / octantETH
+			explanation += fmt.Sprintf(" (implied $%.0f/ETH)", implied)
+			if implied < 800 || implied > 6000 {
 				verdict = VerdictConflicting
-				explanation += " — Octant funding exceeds OSO's cross-platform total, possible indexing gap"
-				severity = "high"
+				explanation += " — outside any plausible ETH price, one source is missing or double-counting epochs"
+				severity = "medium"
 			}
 		}
 
 		report.Checks = append(report.Checks, CorroborationCheck{
-			Claim:       "Cross-platform funding totals",
-			SourceA:     "OSO (cross-platform, 6mo)",
-			ValueA:      fmt.Sprintf("$%.0f USD", osoFunding),
-			SourceB:     "Octant Protocol (all epochs, estimated USD)",
-			ValueB:      fmt.Sprintf("$%.0f USD (~%.4f ETH at $2000)", octantUSD, totalOctantETH),
+			Claim:       "Octant funding total",
+			SourceA:     "OSO (Octant, all time, USD)",
+			ValueA:      fmt.Sprintf("$%.0f USD", osoOctant),
+			SourceB:     "Octant API (all epochs)",
+			ValueB:      fmt.Sprintf("%.4f ETH", octantETH),
 			Verdict:     verdict,
 			Explanation: explanation,
 			Severity:    severity,

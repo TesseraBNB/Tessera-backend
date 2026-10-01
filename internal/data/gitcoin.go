@@ -2,165 +2,292 @@ package data
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
+	"sort"
+	"strconv"
+	"strings"
 )
 
-const GitcoinGraphQLURL = "https://grants-stack-indexer-v2.gitcoin.co/graphql"
+// Gitcoin Grants data, read from Open Source Observer's copy of the Gitcoin
+// dataset: every donation and matching payout from 2019 until Gitcoin shut
+// Grants Stack down in May 2025 (its own indexer at grants-stack-indexer-v2
+// went offline with it). Needs OSO_API_KEY.
+const (
+	gitcoinTable    = "oso.int_events__gitcoin_funding"
+	GitcoinCoverage = "Gitcoin Grants Stack rounds, 2019 to May 2025 (GG23), via Open Source Observer"
+)
 
 type GitcoinClient struct {
-	url string
+	oso *OSOClient
 }
 
-func NewGitcoinClient() *GitcoinClient {
-	return &GitcoinClient{url: GitcoinGraphQLURL}
+func NewGitcoinClient(oso *OSOClient) *GitcoinClient {
+	return &GitcoinClient{oso: oso}
 }
 
-type graphqlRequest struct {
-	Query     string         `json:"query"`
-	Variables map[string]any `json:"variables"`
+// GitcoinRound is one round, or one project's funding within a round.
+type GitcoinRound struct {
+	Ref          string  `json:"ref"` // chainId:roundId, how tools and the CLI name a round
+	RoundID      string  `json:"roundId"`
+	RoundName    string  `json:"roundName"`
+	RoundNumber  int     `json:"roundNumber,omitempty"` // GG number; 0 for community rounds
+	Chain        string  `json:"chain,omitempty"`
+	ChainID      int     `json:"chainId,omitempty"`
+	Projects     int     `json:"projects,omitempty"`
+	Donations    int     `json:"donations"`
+	UniqueDonors int     `json:"uniqueDonors"`
+	DonatedUSD   float64 `json:"donatedUsd"`
+	MatchedUSD   float64 `json:"matchedUsd"`
+	LastDonation string  `json:"lastDonation,omitempty"`
 }
 
-type graphqlResponse struct {
-	Data   json.RawMessage `json:"data"`
-	Errors []struct {
-		Message string `json:"message"`
-	} `json:"errors"`
+// GitcoinProject is a funding recipient, with its per-round history when
+// looked up by address.
+type GitcoinProject struct {
+	RecipientAddress string         `json:"recipientAddress"`
+	Name             string         `json:"name"`
+	OSOProject       string         `json:"osoProject,omitempty"`
+	RoundCount       int            `json:"roundCount"`
+	Donations        int            `json:"donations"`
+	UniqueDonors     int            `json:"uniqueDonors"`
+	DonatedUSD       float64        `json:"donatedUsd"`
+	MatchedUSD       float64        `json:"matchedUsd"`
+	Rounds           []GitcoinRound `json:"rounds,omitempty"`
 }
 
-func (c *GitcoinClient) query(ctx context.Context, q string, vars map[string]any) (json.RawMessage, error) {
-	body, _ := json.Marshal(graphqlRequest{Query: q, Variables: vars})
-	respBody, err := postJSON(ctx, c.url, body, map[string]string{"Content-Type": "application/json"})
+// GitcoinDonation is one donor-to-project contribution in a round.
+type GitcoinDonation struct {
+	Donor     string
+	Recipient string
+	Project   string
+	AmountUSD float64
+}
+
+// per-group aggregate columns shared by the queries below
+const gitcoinAgg = `count_if(event_source = 'GITCOIN_DONATIONS') AS donations,
+	count(DISTINCT donor_address) AS donors,
+	sum(CASE WHEN event_source = 'GITCOIN_DONATIONS' THEN amount_in_usd ELSE 0 END) AS donated,
+	sum(CASE WHEN event_source = 'GITCOIN_MATCHING' THEN amount_in_usd ELSE 0 END) AS matched`
+
+// FindByAddress returns everything a recipient address received, round by
+// round (newest first), or nil when it never received Gitcoin funding.
+func (g *GitcoinClient) FindByAddress(ctx context.Context, addr string) (*GitcoinProject, error) {
+	lit, err := sqlAddress(addr)
 	if err != nil {
 		return nil, err
 	}
-
-	var gql graphqlResponse
-	if err := json.Unmarshal(respBody, &gql); err != nil {
+	// GROUPING SETS adds an all-rounds total row (round_id NULL) so unique
+	// donors are counted once across rounds.
+	q := `SELECT round_id, max(round_name) AS round_name, max(round_number) AS round_number,
+	max(chain) AS chain, max(chain_id) AS chain_id, ` + gitcoinAgg + `,
+	max(gitcoin_group_project_name) AS name, max(oso_project_name) AS oso,
+	CAST(max(time) AS varchar) AS last_time, count(DISTINCT round_id) AS rounds
+	FROM ` + gitcoinTable + ` WHERE recipient_address = ` + lit + `
+	GROUP BY GROUPING SETS ((round_id, chain_id), ())`
+	rows, err := g.oso.Query(ctx, q)
+	if err != nil {
 		return nil, err
 	}
-	if len(gql.Errors) > 0 {
-		return nil, fmt.Errorf("GraphQL error: %s", gql.Errors[0].Message)
-	}
-	return gql.Data, nil
-}
-
-// --- Rounds ---
-
-type Round struct {
-	ID                      string          `json:"id"`
-	ChainID                 int             `json:"chainId"`
-	RoundMetadata           json.RawMessage `json:"roundMetadata"`
-	MatchAmount             string          `json:"matchAmount"`
-	MatchTokenAddress       string          `json:"matchTokenAddress"`
-	ApplicationsStartTime   string          `json:"applicationsStartTime"`
-	ApplicationsEndTime     string          `json:"applicationsEndTime"`
-	DonationsStartTime      string          `json:"donationsStartTime"`
-	DonationsEndTime        string          `json:"donationsEndTime"`
-	TotalDonationsCount     int             `json:"totalDonationsCount"`
-	UniqueDonorsCount       int             `json:"uniqueDonorsCount"`
-	TotalAmountDonatedInUsd float64         `json:"totalAmountDonatedInUsd"`
-	MatchAmountInUsd        float64         `json:"matchAmountInUsd"`
-}
-
-func (c *GitcoinClient) GetRounds(ctx context.Context, chainID, first int) ([]Round, error) {
-	q := `query GetRounds($chainId: Int!, $first: Int!) {
-		rounds(
-			filter: { chainId: { equalTo: $chainId } }
-			first: $first
-			orderBy: CREATED_AT_BLOCK_DESC
-		) {
-			nodes {
-				id chainId roundMetadata matchAmount matchTokenAddress
-				applicationsStartTime applicationsEndTime
-				donationsStartTime donationsEndTime
-				totalDonationsCount uniqueDonorsCount
-				totalAmountDonatedInUsd matchAmountInUsd
+	var p *GitcoinProject
+	var rounds []GitcoinRound
+	for _, r := range rows {
+		if r["round_id"] == nil { // the total row
+			if rowInt(r, "rounds") == 0 {
+				continue
 			}
+			p = &GitcoinProject{
+				RecipientAddress: strings.ToLower(addr),
+				Name:             rowStr(r, "name"),
+				OSOProject:       rowStr(r, "oso"),
+				RoundCount:       rowInt(r, "rounds"),
+				Donations:        rowInt(r, "donations"),
+				UniqueDonors:     rowInt(r, "donors"),
+				DonatedUSD:       round2(rowNum(r, "donated")),
+				MatchedUSD:       round2(rowNum(r, "matched")),
+			}
+			continue
 		}
-	}`
-	data, err := c.query(ctx, q, map[string]any{"chainId": chainID, "first": first})
+		rounds = append(rounds, roundFromRow(r))
+	}
+	if p == nil {
+		return nil, nil
+	}
+	sortRoundsNewest(rounds)
+	p.Rounds = rounds
+	return p, nil
+}
+
+// SearchByName finds recipients whose Gitcoin project name contains name.
+// Names are not unique, so these are candidates, not proof of identity.
+func (g *GitcoinClient) SearchByName(ctx context.Context, name string, limit int) ([]GitcoinProject, error) {
+	lit, err := sqlName(name)
 	if err != nil {
 		return nil, err
 	}
-	var result struct {
-		Rounds struct {
-			Nodes []Round `json:"nodes"`
-		} `json:"rounds"`
+	q := `SELECT recipient_address, max(gitcoin_group_project_name) AS name, max(oso_project_name) AS oso,
+	count(DISTINCT round_id) AS rounds, ` + gitcoinAgg + `
+	FROM ` + gitcoinTable + ` WHERE strpos(lower(gitcoin_group_project_name), ` + lit + `) > 0
+	GROUP BY recipient_address ORDER BY sum(amount_in_usd) DESC LIMIT ` + strconv.Itoa(clampLimit(limit, 10))
+	rows, err := g.oso.Query(ctx, q)
+	if err != nil {
+		return nil, err
 	}
-	return result.Rounds.Nodes, json.Unmarshal(data, &result)
+	out := make([]GitcoinProject, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, projectFromRow(r))
+	}
+	return out, nil
 }
 
-// --- Applications ---
-
-type Application struct {
-	ID                      string          `json:"id"`
-	ProjectID               string          `json:"projectId"`
-	Status                  string          `json:"status"`
-	Metadata                json.RawMessage `json:"metadata"`
-	TotalDonationsCount     int             `json:"totalDonationsCount"`
-	UniqueDonorsCount       int             `json:"uniqueDonorsCount"`
-	TotalAmountDonatedInUsd float64         `json:"totalAmountDonatedInUsd"`
+// Rounds lists the most recent rounds with their totals.
+func (g *GitcoinClient) Rounds(ctx context.Context, limit int) ([]GitcoinRound, error) {
+	q := `SELECT round_id, max(round_name) AS round_name, max(round_number) AS round_number,
+	max(chain) AS chain, chain_id, count(DISTINCT recipient_address) AS projects, ` + gitcoinAgg + `,
+	CAST(max(time) AS varchar) AS last_time
+	FROM ` + gitcoinTable + ` GROUP BY round_id, chain_id ORDER BY max(time) DESC LIMIT ` + strconv.Itoa(clampLimit(limit, 50))
+	rows, err := g.oso.Query(ctx, q)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]GitcoinRound, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, roundFromRow(r))
+	}
+	return out, nil
 }
 
-func (c *GitcoinClient) GetRoundProjects(ctx context.Context, roundID string, chainID int) ([]Application, error) {
-	q := `query GetApplications($roundId: String!, $chainId: Int!) {
-		applications(
-			filter: {
-				roundId: { equalTo: $roundId }
-				chainId: { equalTo: $chainId }
-				status: { equalTo: APPROVED }
+// RoundProjects returns a round's summary and its recipients ranked by total
+// funding (donations + matching). ref is chainId:roundId.
+func (g *GitcoinClient) RoundProjects(ctx context.Context, ref string) (*GitcoinRound, []GitcoinProject, error) {
+	where, err := sqlRoundFilter(ref)
+	if err != nil {
+		return nil, nil, err
+	}
+	q := `SELECT recipient_address, max(round_name) AS round_name, max(round_number) AS round_number,
+	max(chain) AS chain, max(chain_id) AS chain_id, max(gitcoin_group_project_name) AS name, max(oso_project_name) AS oso,
+	count(DISTINCT round_id) AS rounds, ` + gitcoinAgg + `, CAST(max(time) AS varchar) AS last_time
+	FROM ` + gitcoinTable + ` WHERE ` + where + `
+	GROUP BY GROUPING SETS ((recipient_address), ())`
+	rows, err := g.oso.Query(ctx, q)
+	if err != nil {
+		return nil, nil, err
+	}
+	var summary *GitcoinRound
+	var projects []GitcoinProject
+	for _, r := range rows {
+		if r["recipient_address"] == nil {
+			if rowInt(r, "rounds") > 0 {
+				s := roundFromRow(r)
+				s.Ref, s.RoundID = ref, ref[strings.Index(ref, ":")+1:]
+				summary = &s
 			}
-		) {
-			nodes {
-				id projectId status metadata
-				totalDonationsCount uniqueDonorsCount totalAmountDonatedInUsd
-			}
+			continue
 		}
-	}`
-	data, err := c.query(ctx, q, map[string]any{"roundId": roundID, "chainId": chainID})
+		projects = append(projects, projectFromRow(r))
+	}
+	if summary == nil {
+		return nil, nil, fmt.Errorf("round %s not found in the Gitcoin dataset", ref)
+	}
+	summary.Projects = len(projects)
+	sortProjectsByFunding(projects)
+	return summary, projects, nil
+}
+
+// RoundDonations returns every individual donation in a round (matching
+// payouts have no donor and are left out). ref is chainId:roundId.
+func (g *GitcoinClient) RoundDonations(ctx context.Context, ref string) ([]GitcoinDonation, error) {
+	where, err := sqlRoundFilter(ref)
 	if err != nil {
 		return nil, err
 	}
-	var result struct {
-		Applications struct {
-			Nodes []Application `json:"nodes"`
-		} `json:"applications"`
+	q := `SELECT donor_address, recipient_address, gitcoin_group_project_name AS name, amount_in_usd
+	FROM ` + gitcoinTable + ` WHERE ` + where + ` AND event_source = 'GITCOIN_DONATIONS' AND donor_address IS NOT NULL`
+	rows, err := g.oso.Query(ctx, q)
+	if err != nil {
+		return nil, err
 	}
-	return result.Applications.Nodes, json.Unmarshal(data, &result)
+	out := make([]GitcoinDonation, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, GitcoinDonation{
+			Donor:     rowStr(r, "donor_address"),
+			Recipient: rowStr(r, "recipient_address"),
+			Project:   rowStr(r, "name"),
+			AmountUSD: rowNum(r, "amount_in_usd"),
+		})
+	}
+	return out, nil
 }
 
-// --- Donations ---
-
-type Donation struct {
-	ID               string  `json:"id"`
-	DonorAddress     string  `json:"donorAddress"`
-	RecipientAddress string  `json:"recipientAddress"`
-	ProjectID        string  `json:"projectId"`
-	AmountInUsd      float64 `json:"amountInUsd"`
-	TransactionHash  string  `json:"transactionHash"`
-}
-
-func (c *GitcoinClient) GetDonations(ctx context.Context, roundID string, chainID, first int) ([]Donation, error) {
-	q := `query GetDonations($roundId: String!, $chainId: Int!, $first: Int!) {
-		donations(
-			filter: { roundId: { equalTo: $roundId }, chainId: { equalTo: $chainId } }
-			first: $first
-			orderBy: AMOUNT_IN_USD_DESC
-		) {
-			nodes {
-				id donorAddress recipientAddress projectId amountInUsd transactionHash
-			}
+// OSOProjectForAddress resolves an address to the OSO project that lists it:
+// first through Gitcoin's recipient-to-project mapping (fast), then OSO's
+// artifact registry (a large table, slow). It returns nil when nothing matches.
+func (g *GitcoinClient) OSOProjectForAddress(ctx context.Context, addr string) (*OSOProject, error) {
+	p, err := g.FindByAddress(ctx, addr)
+	if err != nil {
+		return nil, err
+	}
+	if p != nil && p.OSOProject != "" {
+		if proj, _, err := g.oso.FindProject(ctx, p.OSOProject); err == nil && proj != nil {
+			return proj, nil
 		}
-	}`
-	data, err := c.query(ctx, q, map[string]any{"roundId": roundID, "chainId": chainID, "first": first})
-	if err != nil {
-		return nil, err
 	}
-	var result struct {
-		Donations struct {
-			Nodes []Donation `json:"nodes"`
-		} `json:"donations"`
-	}
-	return result.Donations.Nodes, json.Unmarshal(data, &result)
+	return g.oso.FindProjectByAddress(ctx, addr)
 }
+
+// --- row mapping ---
+
+func roundFromRow(r map[string]any) GitcoinRound {
+	ref := ""
+	if id := rowStr(r, "round_id"); id != "" {
+		ref = strconv.Itoa(rowInt(r, "chain_id")) + ":" + id
+	}
+	return GitcoinRound{
+		Ref:          ref,
+		RoundID:      rowStr(r, "round_id"),
+		RoundName:    rowStr(r, "round_name"),
+		RoundNumber:  rowInt(r, "round_number"),
+		Chain:        rowStr(r, "chain"),
+		ChainID:      rowInt(r, "chain_id"),
+		Projects:     rowInt(r, "projects"),
+		Donations:    rowInt(r, "donations"),
+		UniqueDonors: rowInt(r, "donors"),
+		DonatedUSD:   round2(rowNum(r, "donated")),
+		MatchedUSD:   round2(rowNum(r, "matched")),
+		LastDonation: rowStr(r, "last_time"),
+	}
+}
+
+func projectFromRow(r map[string]any) GitcoinProject {
+	return GitcoinProject{
+		RecipientAddress: rowStr(r, "recipient_address"),
+		Name:             rowStr(r, "name"),
+		OSOProject:       rowStr(r, "oso"),
+		RoundCount:       rowInt(r, "rounds"),
+		Donations:        rowInt(r, "donations"),
+		UniqueDonors:     rowInt(r, "donors"),
+		DonatedUSD:       round2(rowNum(r, "donated")),
+		MatchedUSD:       round2(rowNum(r, "matched")),
+	}
+}
+
+func sortRoundsNewest(rs []GitcoinRound) {
+	sort.SliceStable(rs, func(i, j int) bool { return rs[i].LastDonation > rs[j].LastDonation })
+}
+
+func sortProjectsByFunding(ps []GitcoinProject) {
+	sort.SliceStable(ps, func(i, j int) bool {
+		return ps[i].DonatedUSD+ps[i].MatchedUSD > ps[j].DonatedUSD+ps[j].MatchedUSD
+	})
+}
+
+func clampLimit(n, def int) int {
+	if n <= 0 {
+		return def
+	}
+	if n > 100 {
+		return 100
+	}
+	return n
+}
+
+func round2(f float64) float64 { return float64(int64(f*100+0.5)) / 100 }
