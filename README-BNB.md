@@ -1,9 +1,9 @@
 <div align="center">
 
-# Tessera
+# Tessera (BNB Chain)
 
-**An autonomous agent for Ethereum public-goods funding intelligence.**
-_Evidence over narrative._
+**An autonomous agent for public-goods funding intelligence — BNB Chain edition.**
+_Evidence over narrative, notarized on BSC._
 
 </div>
 
@@ -14,6 +14,10 @@ and the agent reasons to a verdict. Any Anthropic Messages-compatible model work
 or free models through [xKiro](https://xkiro.com). Every figure is traced to a tool call; nothing
 is invented.
 
+This edition makes **BNB Smart Chain the first-class network** of the on-chain scanner and
+adds a **tamper-proof verdict notary** — an immutable, zero-admin smart contract on BSC
+testnet that stamps every verdict as a keccak256 hash with a block timestamp.
+
 - **Live agent trace** — watch the agent call `get_project_history`, `get_trust_profile`,
   `scan_chain`, `simulate_mechanisms`, … in real time over SSE.
 - **Trust-graph forensics** — Shannon-entropy donor diversity, Jaccard donor overlap, and
@@ -22,11 +26,59 @@ is invented.
   QF with Gini and top-share.
 - **Cross-ecosystem validation** — corroborates against OSO, GitHub, the Octant forum, and
   Optimism RetroPGF.
+- **On-chain citation layer (BNB Chain)** — `TesseraAttestations`, an immutable
+  zero-admin registry on BSC: every verdict can be notarized as a hash + timestamp,
+  proving it existed and was never altered.
 
-**BNB Chain edition:** the on-chain scanner is BNB-first (BSC 56, opBNB 204, BSC testnet 97),
-and verdicts can be notarized on BSC testnet by `TesseraAttestations`
-([`0x56e6…8427`](https://testnet.bscscan.com/address/0x56e6472693982df91df33842f1d087f2e4308427#code),
-immutable, no admin, no custody). See [README-BNB.md](README-BNB.md) and [contracts/](contracts/).
+## BNB Chain integration
+
+### Chain scanner — BNB-first
+
+`scan_chain` (agent tool + CLI `scan-chain`) covers **11 chains, BNB first**:
+
+| Chain | ChainId | Role |
+| --- | --- | --- |
+| **BNB Smart Chain** | **56** | first-class — native BNB balances, BSC stables (18 dec): USDT `0x55d3…`, USDC `0x8AC7…`, FDUSD `0xc5f0…` |
+| **opBNB** | **204** | first-class — native balance + tx checks |
+| **BSC Testnet** | **97** | staging — tBNB, MockERC20-friendly |
+| + 8 EVM L1/L2s | — | Ethereum, Base, Arbitrum, Optimism, … |
+
+The scanner is **read-only**: Tessera signs nothing and holds no keys to funds.
+See `internal/data/blockchain.go`.
+
+### TesseraAttestations — verdict notary (BSC Testnet 97)
+
+An additive, permissionless smart contract (`contracts/`) that turns BNB Chain into
+the notary for Tessera verdicts:
+
+- `commit(bytes32 verdictHash, RiskLevel, projectId, evidenceUri)` — notarize the
+  keccak256 of any verdict/report; idempotent, open to anyone
+- `getAttestation(hash)` / `isNotarized(hash)` — prove the verdict existed at block
+  time T and was not altered afterwards
+
+**Safety by construction:** no owner, no upgrade path, no custody, no admin
+surface — deployed once, immutable forever.
+
+| Field | Value |
+| --- | --- |
+| Address (verified) | [`0x56e6472693982df91df33842f1d087f2e4308427`](https://testnet.bscscan.com/address/0x56e6472693982df91df33842f1d087f2e4308427#code) |
+| Network | BNB Smart Chain Testnet (chainId 97) |
+| Deploy tx | `0x9138fbd9ee54ea3ae1fffe5834d2b33e8970a5e9b1e476b3a390b28e3782f1fc` |
+| Deployed / verified | 2026-09-30 · Solidity 0.8.24 · 7 Foundry tests |
+
+Quick usage:
+
+```bash
+# keccak256 of the file's exact bytes; $'\n' restores the trailing newline $(cat) drops
+VERDICT_HASH=$(cast keccak "$(cat contracts/sample-verdict.txt)"$'\n')
+cast send 0x56e6472693982df91df33842f1d087f2e4308427 \
+  "commit(bytes32,uint8,string,string)" \
+  $VERDICT_HASH 2 "octant:ep-23:project-x" "https://…" \
+  --private-key $PK --rpc-url https://bsc-testnet-rpc.publicnode.com
+```
+
+Full reference: [`contracts/README.md`](contracts/README.md) · record:
+[`contracts/deployments/bsc-testnet.json`](contracts/deployments/bsc-testnet.json).
 
 ## Architecture
 
@@ -40,13 +92,17 @@ Your machine: Go service (go run ./cmd/tessera serve)
    └─ internal/agent ── tool loop ──> Anthropic Messages API provider, with fallback
         executes tools in-process     (Hermes relay → ANTHROPIC_BASE_URL → FALLBACK_*)
         └─> data/ (cache + retry + concurrency) · analysis/ · report/
+
+BSC 56 / opBNB 204 / testnet 97  ──read-only RPC──>  scan_chain tool
+TesseraAttestations (BSC 97)     ──optional commit──>  verdict notarization
 ```
 
 The agent runs an **in-process tool-calling loop** over the Anthropic Messages API. Backends
 are tried in order: an optional **Hermes** relay, the provider at `ANTHROPIC_BASE_URL` (the
 Anthropic API when unset, or any compatible provider such as xKiro), then an optional
 fallback provider with its own model id. Tools execute inside the Go process, so no tool
-endpoint is ever exposed to the network. See [ARCHITECTURE.md](ARCHITECTURE.md) for detail.
+endpoint is ever exposed to the network. See
+[ARCHITECTURE.md](ARCHITECTURE.md) for detail.
 
 ## Run it locally
 
@@ -84,6 +140,15 @@ defaults to the latest funded epoch).
 `.env.example` is preset for xKiro with `qwen/qwen3.8-omni-flash:free`. For Claude directly,
 clear `ANTHROPIC_BASE_URL`, use an Anthropic key and `TESSERA_MODEL=claude-opus-4-8`.
 
+**Contracts** (Foundry, optional — already deployed):
+
+```bash
+cd contracts
+forge install && forge test   # 7 tests
+cp .env.example .env          # DEPLOYER_PRIVATE_KEY + ETHERSCAN_API_KEY
+forge script script/Deploy.s.sol --rpc-url bsc_testnet --broadcast --verify
+```
+
 ## Configuration
 
 Backend (`.env`):
@@ -108,6 +173,9 @@ The agent needs at least one of `HERMES_BASE_URL`, `ANTHROPIC_API_KEY`, or `FALL
 Frontend (Tessera-frontend `.env.local`, both optional): `NEXT_PUBLIC_API_URL` (default
 `http://localhost:8080`), `NEXT_PUBLIC_SITE_URL`.
 
+Contracts (`contracts/.env`): `DEPLOYER_PRIVATE_KEY`, `BSC_TESTNET_RPC`,
+`ETHERSCAN_API_KEY` — see `contracts/.env.example`.
+
 ## API
 
 | Endpoint | Description |
@@ -131,7 +199,7 @@ go build -o tessera ./cmd/tessera/
 ./tessera analyze-epoch -e 5          # composite ranking
 ./tessera trust-graph -e 5            # trust-graph metrics
 ./tessera simulate -e 5               # mechanism comparison
-./tessera scan-chain <0xaddr>         # 11-chain on-chain scan (BNB Chain + EVM L1/L2s)
+./tessera scan-chain <0xaddr>         # 11-chain on-chain scan (BNB Chain first: BSC 56 · opBNB 204 · testnet 97)
 ./tessera status                      # connectivity + agent backends
 ```
 
@@ -156,16 +224,19 @@ agent can call the same tools. Both transports share one core (`internal/mcp`).
 - **Backend:** runs locally (above). It is also container-ready for hosting: `Dockerfile` +
   `railway.toml` (healthcheck `/api/health`). If you host it, set `NEXT_PUBLIC_API_URL` on
   Vercel to its URL and keep the frontend origin in `ALLOWED_ORIGINS`.
+- **Contracts → BSC:** `cd contracts && forge script script/Deploy.s.sol --rpc-url bsc_testnet
+  --broadcast --verify` (already live + verified on BSC testnet 97).
 
 ## Development
 
 ```bash
 go build ./... && go vet ./... && go test ./...   # backend
 pnpm lint && pnpm build                           # frontend (Tessera-frontend repo)
+cd contracts && forge build && forge test         # contracts (7 tests)
 ```
 
-CI (`.github/workflows/ci.yml`) runs the backend suite plus `golangci-lint` and a Docker build;
-the frontend repo runs its own lint + build.
+CI (`.github/workflows/ci.yml`) runs the backend suite plus `golangci-lint` and a Docker
+build; the frontend repo runs its own lint + build.
 
 ## Project structure
 
@@ -175,12 +246,12 @@ internal/
   agent/            tool-calling loop, Messages API transport + fallback, tool registry
   analysis/         deterministic analytics (scoring, trust graph, mechanisms)
   config/           typed env configuration
-  data/             upstream clients (Octant, OSO, GitHub, Discourse, RetroPGF, chains) + cache/retry
+  data/             upstream clients (Octant, OSO, GitHub, Discourse, RetroPGF, chains — BSC first) + cache/retry
   ethunit/          wei→ETH (leaf, shared)
   report/           Markdown + branded PDF generation
   server/           HTTP API: app, middleware, SSE, handlers
 frontend/           Next.js 16 app (separate repo: TesseraBNB/Tessera-frontend)
-contracts/          TesseraAttestations — verdict notary on BSC testnet (Foundry)
+contracts/          TesseraAttestations — immutable verdict notary on BSC (Foundry)
 Dockerfile · railway.toml
 ```
 
