@@ -8,9 +8,10 @@ _Evidence over narrative._
 </div>
 
 Tessera evaluates public-goods projects (Octant quadratic funding, Gitcoin, Optimism
-RetroPGF) the way a skeptical analyst would. It is a **real tool-calling agent** — Claude
-Opus 4.8 decides which data to pull, Tessera runs the tools in-process against live
-sources, and the agent reasons to a verdict. Every figure is traced to a tool call; nothing
+RetroPGF) the way a skeptical analyst would. It is a **real tool-calling agent** — the
+model decides which data to pull, Tessera runs the tools in-process against live sources,
+and the agent reasons to a verdict. Any Anthropic Messages-compatible model works: Claude,
+or free models through [xKiro](https://xkiro.com). Every figure is traced to a tool call; nothing
 is invented.
 
 - **Live agent trace** — watch the agent call `get_project_history`, `get_trust_profile`,
@@ -25,37 +26,58 @@ is invented.
 ## Architecture
 
 ```
-Browser ── Vercel (Next.js 16) ──HTTPS──> Railway (Go service)
-                                             ├─ /api/*         JSON (fast, no LLM)
-                                             ├─ /api/agent/*   SSE (tool_call → result → text)
-                                             └─ internal/agent ── tool loop ──> Hermes ──> Opus 4.8
-                                                  executes tools in-process     └─(fallback)─> Anthropic API
-                                                  └─> data/ (cache + retry + concurrency) · analysis/ · report/
+Browser ── https://tessera-bnb.vercel.app (Next.js 16)
+   │  the page calls http://localhost:8080 from the visitor's own browser
+   ▼
+Your machine: Go service (go run ./cmd/tessera serve)
+   ├─ /api/*         JSON (fast, no LLM)
+   ├─ /api/agent/*   SSE (tool_call → result → text)
+   └─ internal/agent ── tool loop ──> Anthropic Messages API provider, with fallback
+        executes tools in-process     (Hermes relay → ANTHROPIC_BASE_URL → FALLBACK_*)
+        └─> data/ (cache + retry + concurrency) · analysis/ · report/
 ```
 
-The agent runs an **in-process tool-calling loop** over the Anthropic Messages API. In
-production the request is relayed by **Hermes** to a real Claude Code Opus 4.8 agent; if
-Hermes is unset or failing, Tessera falls back to the Anthropic API directly. Tools execute
-inside the Go process, so no tool endpoint is ever exposed to the network. See
-[ARCHITECTURE.md](ARCHITECTURE.md) for detail.
+The agent runs an **in-process tool-calling loop** over the Anthropic Messages API. Backends
+are tried in order: an optional **Hermes** relay, the provider at `ANTHROPIC_BASE_URL` (the
+Anthropic API when unset, or any compatible provider such as xKiro), then an optional
+fallback provider with its own model id. Tools execute inside the Go process, so no tool
+endpoint is ever exposed to the network. See [ARCHITECTURE.md](ARCHITECTURE.md) for detail.
 
-## Quickstart (local)
+## Run it locally
 
-**Backend** (Go ≥ 1.25):
+The UI is live at **https://tessera-bnb.vercel.app**. It talks to a Tessera backend on
+**your** machine at `http://localhost:8080`, so start the backend and the site lights up.
+
+**1. Backend** (Go ≥ 1.25)
 
 ```bash
-cp .env.example .env          # set ANTHROPIC_API_KEY (or HERMES_BASE_URL + HERMES_TOKEN)
+git clone https://github.com/TesseraBNB/Tessera-backend.git tessera && cd tessera
+cp .env.example .env          # Windows: copy .env.example .env
+# optional: put a free xKiro key (https://xkiro.com) in ANTHROPIC_API_KEY to enable the agent
 go run ./cmd/tessera serve    # → http://localhost:8080
 ```
 
-**Frontend** (Node ≥ 20, pnpm):
+Check it: `curl http://localhost:8080/api/health` → `{"status":"ok"}`.
+
+**2. Open the UI** at https://tessera-bnb.vercel.app/dashboard. The badge in the top-right
+shows the model once the backend is reachable ("offline" means it is not running). Chrome
+may ask to let the site reach devices on your local network; allow it. If your browser
+blocks requests from a public site to `localhost`, run the frontend locally (step 3).
+
+**3. Frontend locally (optional)** — Node ≥ 20, pnpm:
 
 ```bash
-cd frontend
-cp .env.example .env.local    # NEXT_PUBLIC_API_URL=http://localhost:8080
-pnpm install
-pnpm dev                      # → http://localhost:3000
+git clone https://github.com/TesseraBNB/Tessera-frontend.git && cd Tessera-frontend
+pnpm install && pnpm dev      # → http://localhost:3000 (API defaults to http://localhost:8080)
 ```
+
+**Without an AI key** the server still runs: Explore (epoch ranking + anomaly detection),
+the `/api/*` analytics, `scan-chain` and the MCP tools all work; the agent endpoints answer
+503 until a key is set. Octant's allocation rounds have data for epochs 1–10 (Tessera
+defaults to the latest funded epoch).
+
+`.env.example` is preset for xKiro with `qwen/qwen3.8-omni-flash:free`. For Claude directly,
+clear `ANTHROPIC_BASE_URL`, use an Anthropic key and `TESSERA_MODEL=claude-opus-4-8`.
 
 ## Configuration
 
@@ -63,22 +85,23 @@ Backend (`.env`):
 
 | Variable | Purpose | Default |
 | --- | --- | --- |
-| `HERMES_BASE_URL` / `HERMES_TOKEN` | Relay to a real Claude Code Opus 4.8 agent (primary) | — |
-| `ANTHROPIC_API_KEY` | Direct Anthropic API (fallback / simplest local setup) | — |
+| `HERMES_BASE_URL` / `HERMES_TOKEN` | Optional relay tried first (Anthropic Messages API shape) | — |
+| `ANTHROPIC_API_KEY` | Key for the provider at `ANTHROPIC_BASE_URL` | — |
 | `ANTHROPIC_BASE_URL` | Any Anthropic Messages-compatible provider (e.g. `https://api.xkiro.com`) | Anthropic API |
 | `FALLBACK_BASE_URL` / `FALLBACK_API_KEY` / `FALLBACK_MODEL` | Second Messages-compatible provider, tried last, with its own model id | — |
-| `TESSERA_MODEL` | Agent model | `claude-opus-4-8` |
+| `TESSERA_MODEL` | Agent model (`.env.example`: `qwen/qwen3.8-omni-flash:free`) | `claude-opus-4-8` |
 | `PORT` | HTTP port | `8080` |
-| `ALLOWED_ORIGINS` | CORS allowlist (CSV) | `http://localhost:3000` |
+| `ALLOWED_ORIGINS` | CORS allowlist (CSV) | `http://localhost:3000,https://tessera-bnb.vercel.app` |
 | `OSO_API_KEY`, `GITHUB_TOKEN` | Enrich cross-referencing | — |
 | `RATE_LIMIT_RPS` / `RATE_LIMIT_BURST` | Per-IP rate limit | `1` / `5` |
 | `AGENT_MAX_ITERATIONS` | Max tool-use rounds per run | `12` |
 | `AGENT_DAILY_BUDGET` | Global agent runs/day, 0 = unlimited | `0` |
 | `CACHE_TTL` | In-memory upstream cache | `10m` |
 
-At least one of `HERMES_BASE_URL`, `ANTHROPIC_API_KEY`, or `FALLBACK_BASE_URL` + `FALLBACK_API_KEY` must be set.
+The agent needs at least one of `HERMES_BASE_URL`, `ANTHROPIC_API_KEY`, or `FALLBACK_BASE_URL` + `FALLBACK_API_KEY`.
 
-Frontend (`frontend/.env.local`): `NEXT_PUBLIC_API_URL`, `NEXT_PUBLIC_SITE_URL`.
+Frontend (Tessera-frontend `.env.local`, both optional): `NEXT_PUBLIC_API_URL` (default
+`http://localhost:8080`), `NEXT_PUBLIC_SITE_URL`.
 
 ## API
 
@@ -109,7 +132,7 @@ go build -o tessera ./cmd/tessera/
 
 ## Use Tessera as an MCP server
 
-Expose Tessera's ten tools to any MCP-aware agent (e.g. **Claude Code via Hermes**) — no API
+Expose Tessera's ten tools to any MCP-aware agent (e.g. **Claude Code**) — no API
 key required, since the reasoning happens on the client side and the tools run in-process.
 
 ```bash
@@ -123,18 +146,17 @@ agent can call the same tools. Both transports share one core (`internal/mcp`).
 
 ## Deploy
 
-- **Backend → Railway:** Docker build from the repo `Dockerfile` (see `railway.toml`); set the
-  env vars above; healthcheck `/api/health`.
-- **Frontend → Vercel:** import `frontend/`; set `NEXT_PUBLIC_API_URL` to the Railway URL.
-- **Hermes:** point `HERMES_BASE_URL`/`HERMES_TOKEN` at your relay (Anthropic Messages API
-  shape, with `tools`/`tool_use`). Without it, set `ANTHROPIC_API_KEY` and Tessera uses the
-  Anthropic API directly.
+- **Frontend → Vercel:** https://tessera-bnb.vercel.app from `TesseraBNB/Tessera-frontend`.
+  With `NEXT_PUBLIC_API_URL` unset it calls `http://localhost:8080` on the visitor's machine.
+- **Backend:** runs locally (above). It is also container-ready for hosting: `Dockerfile` +
+  `railway.toml` (healthcheck `/api/health`). If you host it, set `NEXT_PUBLIC_API_URL` on
+  Vercel to its URL and keep the frontend origin in `ALLOWED_ORIGINS`.
 
 ## Development
 
 ```bash
 go build ./... && go vet ./... && go test ./...   # backend
-cd frontend && pnpm lint && pnpm build            # frontend
+pnpm lint && pnpm build                           # frontend (Tessera-frontend repo)
 ```
 
 CI (`.github/workflows/ci.yml`) runs the backend suite plus `golangci-lint` and a Docker build;
@@ -145,14 +167,14 @@ the frontend repo runs its own lint + build.
 ```
 cmd/tessera/        CLI + server entrypoint
 internal/
-  agent/            tool-calling loop, Hermes/Anthropic transport, tool registry
+  agent/            tool-calling loop, Messages API transport + fallback, tool registry
   analysis/         deterministic analytics (scoring, trust graph, mechanisms)
   config/           typed env configuration
   data/             upstream clients (Octant, OSO, GitHub, Discourse, RetroPGF, chains) + cache/retry
   ethunit/          wei→ETH (leaf, shared)
   report/           Markdown + branded PDF generation
   server/           HTTP API: app, middleware, SSE, handlers
-frontend/           Next.js 16 app (Vercel)
+frontend/           Next.js 16 app (separate repo: TesseraBNB/Tessera-frontend)
 Dockerfile · railway.toml
 ```
 

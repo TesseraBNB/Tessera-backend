@@ -1,13 +1,13 @@
 # Architecture
 
-Tessera is a Go API service (Railway) plus a Next.js app (Vercel). The Go service
-embeds an autonomous agent that drives an **in-process tool-calling loop** over the
-Anthropic Messages API.
+Tessera is a Go API service (run on the user's machine, or any container host) plus a
+Next.js app (Vercel). The Go service embeds an autonomous agent that drives an
+**in-process tool-calling loop** over the Anthropic Messages API.
 
 ## Topology
 
 ```
-                         Vercel                         Railway
+                         Vercel                   localhost:8080 (or a host)
 ┌───────────┐      ┌──────────────────┐       ┌──────────────────────────────┐
 │  Browser  │─────▶│  Next.js 16 app  │──SSE─▶│  Go service (internal/server) │
 └───────────┘      │  NEXT_PUBLIC_API │ JSON  │  http.Server + timeouts +     │
@@ -22,18 +22,19 @@ Anthropic Messages API.
                                               │     │  (Octant/OSO/GitHub/…)  │   (cache+retry+concurrency)
                                               │     │                         │   internal/analysis
                                               │     ▼                         │
-                                              │   Hermes relay ──▶ Opus 4.8   │
-                                              │     └(fallback)─▶ Anthropic   │
+                                              │   Messages API providers:     │
+                                              │   Hermes → BASE_URL → FALLBACK│
                                               └──────────────────────────────┘
 ```
 
 ## The agent loop (`internal/agent`)
 
-Option A: **Tessera owns the loop.** Hermes is only a transport that relays the
+Option A: **Tessera owns the loop.** Providers are only transports that speak the
 Anthropic Messages API (including `tools`/`tool_use`). The loop (`loop.go`):
 
-1. Send `messages + tools + system` to the model via `sendMessages` (tries Hermes,
-   then the Anthropic API as fallback).
+1. Send `messages + tools + system` to the model via `sendMessages`, trying each
+   configured backend in order: Hermes relay, the provider at `ANTHROPIC_BASE_URL`
+   (Anthropic API by default, or e.g. xKiro), then `FALLBACK_*` with its own model id.
 2. If the response contains `tool_use` blocks, execute each tool **in-process**
    (`exec.go` → `internal/data` + `internal/analysis`), append `tool_result`, and loop.
 3. When `stop_reason != "tool_use"`, the turn's text is the final answer.
@@ -82,10 +83,10 @@ package-level mutable state, so there is no cross-request data race. Files:
 
 ## Security model
 
-- **CORS allowlist** (not `*`); the browser calls Railway directly, only allowed origins
+- **CORS allowlist** (not `*`); the browser calls the Go service directly, only allowed origins
   get the ACAO header.
 - **Rate limiting** per IP + a **daily budget** on agent runs to bound LLM cost.
-- **No secrets in the client.** API keys live only in the Railway environment.
+- **No secrets in the client.** API keys live only in the backend's environment (`.env`).
 - **No inbound tool surface** — tools are in-process Go functions.
 - Report file serving is path-traversal guarded.
 
