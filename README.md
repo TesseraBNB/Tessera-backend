@@ -27,6 +27,8 @@ is invented.
 and verdicts can be notarized on BSC testnet by `TesseraAttestations`
 ([`0x56e6…8427`](https://testnet.bscscan.com/address/0x56e6472693982df91df33842f1d087f2e4308427#code),
 immutable, no admin, no custody). See [README-BNB.md](README-BNB.md) and [contracts/](contracts/).
+Pitch deck: [Slides/Tessera_Deck.pdf](Slides/Tessera_Deck.pdf) (every figure from
+[examples/agent-trace-epoch10.md](examples/agent-trace-epoch10.md) and live Octant data).
 
 ## Architecture
 
