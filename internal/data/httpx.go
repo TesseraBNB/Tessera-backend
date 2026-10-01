@@ -17,6 +17,11 @@ var sharedHTTP = &http.Client{Timeout: 30 * time.Second}
 const (
 	maxRetries  = 3
 	baseBackoff = 300 * time.Millisecond
+
+	// userAgent identifies Tessera to upstream APIs. Cloudflare-fronted sources
+	// (notably the Octant backend) answer library defaults such as
+	// "Go-http-client/1.1" with a 403 bot challenge; a descriptive UA passes.
+	userAgent = "Tessera/1.0 (+https://github.com/TesseraBNB)"
 )
 
 // getJSON issues a GET with retry/backoff on transient failures (network
@@ -47,6 +52,7 @@ func doWithRetry(ctx context.Context, method, url string, body []byte, headers m
 		if err != nil {
 			return nil, err // construction errors are not retryable
 		}
+		req.Header.Set("User-Agent", userAgent) // callers may override below
 		for k, v := range headers {
 			req.Header.Set(k, v)
 		}

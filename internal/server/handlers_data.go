@@ -13,7 +13,11 @@ func (a *App) handleCurrentEpoch(w http.ResponseWriter, r *http.Request) {
 		a.jsonError(w, err.Error(), http.StatusBadGateway)
 		return
 	}
-	a.writeJSON(w, http.StatusOK, map[string]any{"currentEpoch": ep.CurrentEpoch})
+	out := map[string]any{"currentEpoch": ep.CurrentEpoch}
+	if latest, err := a.octant.GetLatestFundedEpoch(r.Context()); err == nil {
+		out["latestFundedEpoch"] = latest
+	}
+	a.writeJSON(w, http.StatusOK, out)
 }
 
 func (a *App) handleProjects(w http.ResponseWriter, r *http.Request) {

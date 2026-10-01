@@ -23,13 +23,17 @@ type toolDef struct {
 func (c *Client) buildRegistry() map[string]toolDef {
 	defs := []toolDef{
 		{
-			tool: Tool{Name: "get_current_epoch", Description: "Get Octant's current funding epoch number.", InputSchema: schemaEmpty},
+			tool: Tool{Name: "get_current_epoch", Description: "Get Octant's current epoch number and latestFundedEpoch, the most recent epoch with funding data. The epoch counter keeps advancing after allocation rounds stop, so analyze latestFundedEpoch rather than currentEpoch.", InputSchema: schemaEmpty},
 			exec: func(ctx context.Context, _ json.RawMessage) (string, error) {
 				ep, err := c.octant.GetCurrentEpoch(ctx)
 				if err != nil {
 					return "", err
 				}
-				return jsonStr(map[string]int{"currentEpoch": ep.CurrentEpoch})
+				out := map[string]int{"currentEpoch": ep.CurrentEpoch}
+				if latest, err := c.octant.GetLatestFundedEpoch(ctx); err == nil {
+					out["latestFundedEpoch"] = latest
+				}
+				return jsonStr(out)
 			},
 		},
 		{
@@ -83,17 +87,12 @@ func (c *Client) buildRegistry() map[string]toolDef {
 			tool: Tool{Name: "get_trust_profile", Description: "Trust-graph metrics for an epoch: donor diversity (Shannon entropy), whale dependency, coordination/Sybil risk (max Jaccard donor overlap), and repeat donors. Provide an address for one project, or omit it for all projects.", InputSchema: schemaEpochAddrOptional},
 			exec: func(ctx context.Context, in json.RawMessage) (string, error) {
 				var args struct {
-					Epoch   int    `json:"epoch"`
 					Address string `json:"address"`
 				}
 				_ = json.Unmarshal(in, &args)
-				epoch := args.Epoch
-				if epoch == 0 {
-					e, err := c.octant.GetCurrentEpoch(ctx)
-					if err != nil {
-						return "", err
-					}
-					epoch = e.CurrentEpoch
+				epoch, err := c.epochArg(ctx, in)
+				if err != nil {
+					return "", err
 				}
 				ad, err := c.allocData(ctx, epoch)
 				if err != nil {
@@ -282,11 +281,7 @@ func (c *Client) epochArg(ctx context.Context, in json.RawMessage) (int, error) 
 	if a.Epoch > 0 {
 		return a.Epoch, nil
 	}
-	ep, err := c.octant.GetCurrentEpoch(ctx)
-	if err != nil {
-		return 0, err
-	}
-	return ep.CurrentEpoch, nil
+	return c.octant.GetLatestFundedEpoch(ctx)
 }
 
 func stringArg(in json.RawMessage, key string) (string, error) {
@@ -314,8 +309,8 @@ func jsonStr(v any) (string, error) {
 var (
 	schemaEmpty             = json.RawMessage(`{"type":"object","properties":{}}`)
 	schemaAddress           = json.RawMessage(`{"type":"object","properties":{"address":{"type":"string","description":"EVM address, 0x-prefixed"}},"required":["address"]}`)
-	schemaEpoch             = json.RawMessage(`{"type":"object","properties":{"epoch":{"type":"integer","description":"Octant epoch number; omit for the latest epoch"}}}`)
-	schemaEpochAddrOptional = json.RawMessage(`{"type":"object","properties":{"epoch":{"type":"integer","description":"Octant epoch number; omit for latest"},"address":{"type":"string","description":"Project address; omit to return all projects"}}}`)
+	schemaEpoch             = json.RawMessage(`{"type":"object","properties":{"epoch":{"type":"integer","description":"Octant epoch number; omit for the latest epoch with funding data"}}}`)
+	schemaEpochAddrOptional = json.RawMessage(`{"type":"object","properties":{"epoch":{"type":"integer","description":"Octant epoch number; omit for the latest epoch with funding data"},"address":{"type":"string","description":"Project address; omit to return all projects"}}}`)
 	schemaProjectName       = json.RawMessage(`{"type":"object","properties":{"project_name":{"type":"string","description":"Project name"}},"required":["project_name"]}`)
 	schemaOwnerRepo         = json.RawMessage(`{"type":"object","properties":{"owner":{"type":"string"},"repo":{"type":"string"}},"required":["owner","repo"]}`)
 	schemaRetro             = json.RawMessage(`{"type":"object","properties":{"name":{"type":"string"},"address":{"type":"string"},"github_url":{"type":"string"}},"required":["name"]}`)

@@ -55,6 +55,33 @@ func (c *OctantClient) GetCurrentEpoch(ctx context.Context) (*EpochCurrent, erro
 	return &result, json.Unmarshal(data, &result)
 }
 
+// minFundedProjects is the fewest rewarded projects an epoch needs before
+// cross-project analyses (ranking, donor overlap, mechanism simulation) mean
+// anything; with a single project they are degenerate.
+const minFundedProjects = 2
+
+// GetLatestFundedEpoch returns the most recent epoch, at or before the current
+// one, whose rewards list at least minFundedProjects projects. Octant's epoch
+// counter keeps advancing after allocation rounds stop producing rewards (empty
+// epochs return an empty list, not an error), so the current epoch is not a
+// usable default for analysis.
+func (c *OctantClient) GetLatestFundedEpoch(ctx context.Context) (int, error) {
+	cur, err := c.GetCurrentEpoch(ctx)
+	if err != nil {
+		return 0, err
+	}
+	for epoch := cur.CurrentEpoch; epoch >= 1; epoch-- {
+		rewards, err := c.GetProjectRewards(ctx, epoch)
+		if err != nil {
+			return 0, err
+		}
+		if len(rewards) >= minFundedProjects {
+			return epoch, nil
+		}
+	}
+	return 0, fmt.Errorf("no Octant epoch up to %d has rewards for %d+ projects", cur.CurrentEpoch, minFundedProjects)
+}
+
 type EpochInfo struct {
 	StakingProceeds  string `json:"stakingProceeds"`
 	TotalEffective   string `json:"totalEffective"`

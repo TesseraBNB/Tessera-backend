@@ -48,6 +48,29 @@ func TestGetJSONClientErrorDoesNotRetry(t *testing.T) {
 	}
 }
 
+func TestGetJSONSendsUserAgent(t *testing.T) {
+	var got string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.Header.Get("User-Agent")
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer srv.Close()
+
+	if _, err := getJSON(context.Background(), srv.URL, nil); err != nil {
+		t.Fatalf("getJSON: %v", err)
+	}
+	if got != userAgent {
+		t.Errorf("default User-Agent = %q, want %q", got, userAgent)
+	}
+
+	if _, err := getJSON(context.Background(), srv.URL, map[string]string{"User-Agent": "custom"}); err != nil {
+		t.Fatalf("getJSON: %v", err)
+	}
+	if got != "custom" {
+		t.Errorf("caller User-Agent = %q, want %q", got, "custom")
+	}
+}
+
 func TestGetJSONRespectsContextCancel(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError) // always transient → would retry
