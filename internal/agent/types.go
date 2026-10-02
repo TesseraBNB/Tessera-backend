@@ -75,11 +75,17 @@ type EventFunc func(Event)
 // --- internal Messages API wire shapes ---
 
 type messagesRequest struct {
-	Model     string    `json:"model"`
-	MaxTokens int       `json:"max_tokens"`
-	System    string    `json:"system,omitempty"`
-	Messages  []Message `json:"messages"`
-	Tools     []Tool    `json:"tools,omitempty"`
+	Model      string      `json:"model"`
+	MaxTokens  int         `json:"max_tokens"`
+	System     string      `json:"system,omitempty"`
+	Messages   []Message   `json:"messages"`
+	Tools      []Tool      `json:"tools,omitempty"`
+	ToolChoice *ToolChoice `json:"tool_choice,omitempty"`
+}
+
+// ToolChoice constrains tool use for one request; {"type":"none"} forbids it.
+type ToolChoice struct {
+	Type string `json:"type"`
 }
 
 type messagesResponse struct {

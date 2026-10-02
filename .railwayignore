@@ -1,0 +1,15 @@
+# Files `railway up` does not need to upload: the Go service builds from
+# go.mod, cmd/ and internal/ only (see Dockerfile). .gitignore also applies.
+frontend/
+contracts/
+Slides/
+References/
+deploy/
+examples/
+skills/
+reports/
+*.mp4
+*.pdf
+*.png
+.env
+.env.*

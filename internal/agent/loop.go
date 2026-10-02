@@ -7,11 +7,17 @@ import (
 	"strings"
 )
 
+// finalTurnNudge goes back with the last round's tool results, so a model that
+// would keep calling tools writes its answer from the evidence it already has.
+const finalTurnNudge = "You have used every tool round available. Do not call any more tools: write your final answer now from the evidence gathered so far, and name any evidence you could not collect."
+
 // Run drives the tool-calling loop: the model is given the tool set and a task,
 // it decides which tools to call, Tessera executes them in-process and feeds the
 // results back, repeating until the model produces a final answer (stop_reason
-// is no longer "tool_use"). Streaming events are delivered via emit, which may
-// be nil. The returned string is the model's final answer text.
+// is no longer "tool_use"). When AgentMaxIterations rounds are used up, one more
+// turn asks for the answer with tool use switched off, so a run always ends in
+// a report rather than an error. Streaming events are delivered via emit, which
+// may be nil. The returned string is the model's final answer text.
 func (c *Client) Run(ctx context.Context, system, task string, emit EventFunc) (string, error) {
 	if emit == nil {
 		emit = func(Event) {}
@@ -23,14 +29,24 @@ func (c *Client) Run(ctx context.Context, system, task string, emit EventFunc) (
 	tools := c.toolList()
 	msgs := []Message{{Role: "user", Content: []ContentBlock{{Type: "text", Text: task}}}}
 
-	for i := 0; i < c.cfg.AgentMaxIterations; i++ {
-		resp, backendName, err := c.sendMessages(ctx, messagesRequest{
+	for i := 0; i <= c.cfg.AgentMaxIterations; i++ {
+		final := i == c.cfg.AgentMaxIterations
+		req := messagesRequest{
 			Model:     c.cfg.Model,
 			MaxTokens: maxTokens,
 			System:    orDefault(system, AnalystSystem),
 			Messages:  msgs,
 			Tools:     tools,
-		})
+		}
+		if final {
+			req.ToolChoice = &ToolChoice{Type: "none"}
+		}
+		resp, backendName, err := c.sendMessages(ctx, req)
+		if err != nil && final {
+			// A provider without tool_choice support: rely on the nudge alone.
+			req.ToolChoice = nil
+			resp, backendName, err = c.sendMessages(ctx, req)
+		}
 		if err != nil {
 			emit(Event{Type: "error", Text: err.Error()})
 			return "", err
@@ -47,6 +63,9 @@ func (c *Client) Run(ctx context.Context, system, task string, emit EventFunc) (
 					turnText.WriteString(blk.Text)
 				}
 			case "tool_use":
+				if final {
+					continue // out of rounds: never run more tools
+				}
 				emit(Event{Type: "tool_call", Tool: blk.Name, Input: blk.Input})
 				out, terr := c.execTool(ctx, blk.Name, blk.Input)
 				isErr := terr != nil
@@ -69,7 +88,14 @@ func (c *Client) Run(ctx context.Context, system, task string, emit EventFunc) (
 			return strings.TrimSpace(turnText.String()), nil
 		}
 
-		// Feed tool results back for the next turn.
+		if final {
+			break
+		}
+		// Feed tool results back for the next turn; after the last tool round,
+		// ask for the answer.
+		if i == c.cfg.AgentMaxIterations-1 {
+			toolResults = append(toolResults, ContentBlock{Type: "text", Text: finalTurnNudge})
+		}
 		msgs = append(msgs, Message{Role: "user", Content: toolResults})
 	}
 

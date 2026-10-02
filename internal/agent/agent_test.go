@@ -105,6 +105,49 @@ func TestRunExecutesToolLoop(t *testing.T) {
 	}
 }
 
+func TestRunForcesFinalAnswerWhenRoundsRunOut(t *testing.T) {
+	var calls int32
+	var lastBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		atomic.AddInt32(&calls, 1)
+		lastBody = string(body)
+		if strings.Contains(lastBody, `"tool_choice":{"type":"none"}`) {
+			_, _ = io.WriteString(w, `{"stop_reason":"end_turn","role":"assistant","content":[{"type":"text","text":"report from gathered evidence"}]}`)
+			return
+		}
+		// A model that would call tools forever.
+		_, _ = io.WriteString(w, `{"stop_reason":"tool_use","role":"assistant","content":[{"type":"tool_use","id":"t","name":"ping","input":{}}]}`)
+	}))
+	defer srv.Close()
+
+	c := testClient(srv.URL) // AgentMaxIterations: 5
+	var pings int32
+	c.reg = map[string]toolDef{
+		"ping": {
+			tool: Tool{Name: "ping", Description: "ping", InputSchema: schemaEmpty},
+			exec: func(_ context.Context, _ json.RawMessage) (string, error) {
+				atomic.AddInt32(&pings, 1)
+				return "pong", nil
+			},
+		},
+	}
+
+	md, err := c.Run(context.Background(), "system", "do it", nil)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if md != "report from gathered evidence" {
+		t.Errorf("final = %q", md)
+	}
+	if calls != 6 || pings != 5 {
+		t.Errorf("want 5 tool rounds + 1 final turn (6 calls, 5 pings), got %d calls, %d pings", calls, pings)
+	}
+	if !strings.Contains(lastBody, "Do not call any more tools") {
+		t.Errorf("final turn should carry the nudge: %s", lastBody)
+	}
+}
+
 func TestFallbackProviderUsesOwnModel(t *testing.T) {
 	var primaryModel, fallbackModel string
 	modelOf := func(r *http.Request) string {
