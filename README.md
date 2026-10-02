@@ -31,8 +31,10 @@ is invented.
 **BNB Chain edition:** the on-chain scanner is BNB-first (BSC 56, opBNB 204, BSC testnet 97),
 and every verdict can be notarised on BNB Chain as a **BNB Attestation Service** attestation
 holding the keccak256 of the report and of its evidence ([schema](https://www.testnet.bascan.io/schema/0xcd4d38906641353fefefe1caabcba23f730b0512039c1b3c5478d47cf97373f8)).
+The same hash is committed to Tessera's own verified contract, `TesseraAttestations`
+([`0x56e6…8427`](https://testnet.bscscan.com/address/0x56e6472693982df91df33842f1d087f2e4308427#code), [contracts/](contracts/)).
 Anyone can check a report against the chain at [/verify](https://tessera-bnb.vercel.app/verify).
-See [README-BNB.md](README-BNB.md); the earlier standalone notary contract is in [contracts/](contracts/).
+See [README-BNB.md](README-BNB.md).
 Pitch deck: [Slides/Tessera_Deck.pdf](Slides/Tessera_Deck.pdf) (every figure from
 [examples/agent-trace-epoch10.md](examples/agent-trace-epoch10.md) and live Octant data).
 
@@ -117,6 +119,7 @@ Backend (`.env`):
 | `CACHE_TTL` | In-memory upstream cache | `10m` |
 | `NOTARY_PRIVATE_KEY` | Key that signs verdict attestations on BNB Chain; notarisation is off without it. Use a dedicated wallet | — |
 | `NOTARY_RPC_URL` / `NOTARY_BAS_CONTRACT` / `NOTARY_CHAIN_ID` | Chain and BAS contract for attestations | BSC testnet publicnode · `0x6c22…7CBD` · `97` |
+| `NOTARY_REGISTRY_CONTRACT` | TesseraAttestations, which also receives each notarised report hash; empty to skip | `0x56e6…8427` |
 | `NOTARY_DAILY_BUDGET` | Attestations per day, 0 = unlimited | `50` |
 | `PUBLIC_URL` | This API's public URL, written into attested report links | Railway domain, else `http://localhost:$PORT` |
 
@@ -203,7 +206,7 @@ internal/
   report/           Markdown + branded PDF generation
   server/           HTTP API: app, middleware, SSE, handlers
 frontend/           Next.js 16 app (separate repo: TesseraBNB/Tessera-frontend)
-contracts/          TesseraAttestations — first, standalone verdict notary on BSC testnet (Foundry)
+contracts/          TesseraAttestations — Tessera's verdict registry on BSC testnet (Foundry)
 Dockerfile · railway.toml
 ```
 

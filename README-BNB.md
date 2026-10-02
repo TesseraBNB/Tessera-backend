@@ -7,6 +7,15 @@ _Evidence over narrative, notarized on BSC._
 
 </div>
 
+| | |
+| --- | --- |
+| **Live app** | https://tessera-bnb.vercel.app — nothing to install |
+| **Verify a verdict** | https://tessera-bnb.vercel.app/verify · example: [rotki, FUND](https://tessera-bnb.vercel.app/verify?uid=0x658f69a6952bca3e1bdc1aba86df2b788460ceb21e1b1ff1e8cc9d9184dd8b48) |
+| **Smart contract** | `TesseraAttestations` [`0x56e6472693982df91df33842f1d087f2e4308427`](https://testnet.bscscan.com/address/0x56e6472693982df91df33842f1d087f2e4308427#code) — BSC testnet, verified |
+| **On-chain attestations** | BNB Attestation Service [schema `0xcd4d…73f8`](https://www.testnet.bascan.io/schema/0xcd4d38906641353fefefe1caabcba23f730b0512039c1b3c5478d47cf97373f8) · notary `0x02f3…068c` |
+| **Hosted API** | https://tessera-api-production-bef4.up.railway.app (Railway) |
+| **Code** | [Tessera-backend](https://github.com/TesseraBNB/Tessera-backend) · [Tessera-frontend](https://github.com/TesseraBNB/Tessera-frontend) |
+
 Tessera evaluates public-goods projects (Octant quadratic funding, Gitcoin, Optimism
 RetroPGF) the way a skeptical analyst would. It is a **real tool-calling agent** — the
 model decides which data to pull, Tessera runs the tools in-process against live sources,
@@ -15,8 +24,9 @@ or free models through [xKiro](https://xkiro.com). Every figure is traced to a t
 is invented.
 
 This edition makes **BNB Smart Chain the first-class network** of the on-chain scanner and
-adds a **tamper-proof verdict notary** — an immutable, zero-admin smart contract on BSC
-testnet that stamps every verdict as a keccak256 hash with a block timestamp.
+adds a **verdict notary on BNB Chain**: each verdict becomes a BNB Attestation Service
+attestation holding the keccak256 of its report and evidence, and the same hash is committed
+to Tessera's own immutable, zero-admin contract, `TesseraAttestations`.
 
 - **Live agent trace** — watch the agent call `get_project_history`, `get_trust_profile`,
   `scan_chain`, `simulate_mechanisms`, … in real time over SSE.
@@ -33,8 +43,9 @@ testnet that stamps every verdict as a keccak256 hash with a block timestamp.
   (May 2025); Gitcoin's own indexer went offline when Grants Stack shut down.
 - **Verdict notary on BNB Chain** — one click records a verdict as a **BNB Attestation
   Service** attestation on BSC: the project as recipient, the call, and the keccak256 of the
-  report and of every tool result behind it. Anyone can then prove, in the browser and
-  against the chain, that a report is the one Tessera produced and was never altered.
+  report and of every tool result behind it — and commits the same hash to Tessera's own
+  `TesseraAttestations` contract. Anyone can then prove, in the browser and against the chain,
+  that a report is the one Tessera produced and was never altered.
 
 ## BNB Chain integration
 
@@ -62,7 +73,8 @@ them — not only Tessera.
    (`.md`), the evidence (`.evidence.json`: every tool call with its input and raw result) and
    a run record with the keccak256 of both.
 2. **Notarize on BNB Chain** in the console calls `POST /api/notarize?id=<run>`. The server
-   re-checks both hashes, then Tessera's notary wallet sends one BAS `attest` transaction.
+   re-checks both hashes, then Tessera's notary wallet sends one BAS `attest` transaction and
+   commits the same report hash to `TesseraAttestations`, pointing at the BAS attestation.
 3. **Verify** (console, or the public [/verify](https://tessera-bnb.vercel.app/verify) page)
    reads the attestation from a public BSC RPC and hashes the report in the browser. One
    changed character gives a different hash.
@@ -73,7 +85,8 @@ them — not only Tessera.
 | Schema | `address project,string subject,string kind,string verdict,bytes32 reportHash,bytes32 evidenceHash,string reportURI,string agent` |
 | Schema UID | [`0xcd4d3890…7373f8`](https://www.testnet.bascan.io/schema/0xcd4d38906641353fefefe1caabcba23f730b0512039c1b3c5478d47cf97373f8) — non-revocable, no resolver |
 | Attester (notary wallet) | `0x02f333B2A98C414092f57660Cd54Fd34Fd6C068c` |
-| Example | rotki, verdict FUND: [`0x658f69a6…dd8b48`](https://www.testnet.bascan.io/attestation/0x658f69a6952bca3e1bdc1aba86df2b788460ceb21e1b1ff1e8cc9d9184dd8b48) · [verify it](https://tessera-bnb.vercel.app/verify?uid=0x658f69a6952bca3e1bdc1aba86df2b788460ceb21e1b1ff1e8cc9d9184dd8b48) |
+| Second record | `TesseraAttestations.commit(reportHash, riskLevel, projectId, basAttestationUrl)` on `0x56e6…8427` |
+| Example | rotki, verdict FUND: [`0x658f69a6…dd8b48`](https://www.testnet.bascan.io/attestation/0x658f69a6952bca3e1bdc1aba86df2b788460ceb21e1b1ff1e8cc9d9184dd8b48) · [verify it](https://tessera-bnb.vercel.app/verify?uid=0x658f69a6952bca3e1bdc1aba86df2b788460ceb21e1b1ff1e8cc9d9184dd8b48) · [registry commit](https://testnet.bscscan.com/tx/0x6b18f8397995257fd2ed40aa6b772ed87062fac8dcc52cae1c4340e81cde52c9) |
 
 Check one yourself, without Tessera's UI:
 
@@ -89,10 +102,13 @@ curl -s "<reportURI>" | xxd -p | tr -d '\n' | sed 's/^/0x/' | cast keccak
 Setup: put a funded key in `NOTARY_PRIVATE_KEY` and run `tessera notary-setup` once (it
 registers the schema if missing). See `internal/notary`.
 
-### TesseraAttestations — first, standalone notary contract (BSC Testnet 97)
+### TesseraAttestations — Tessera's own notary contract (BSC Testnet 97)
 
-Before moving to BAS, Tessera shipped its own minimal notary contract (`contracts/`). It is
-still deployed and verified:
+Tessera's own minimal registry (`contracts/`), deployed and verified on BSC testnet. Every
+verdict notarised through the app is committed here as well, keyed by the same report hash,
+with the verdict as its risk level (FUND → LOW, HOLD → MEDIUM, REJECT → HIGH) and the BAS
+attestation as its evidence URI. It is open to anyone, so it also works without Tessera's
+backend:
 
 - `commit(bytes32 verdictHash, RiskLevel, projectId, evidenceUri)` — notarize the
   keccak256 of any verdict/report; idempotent, open to anyone
@@ -138,7 +154,8 @@ Go service on Railway (Dockerfile) — or `go run ./cmd/tessera serve` on your m
 
 BSC 56 / opBNB 204 / testnet 97  ──read-only RPC──>  scan_chain tool
 BAS on BSC testnet 97            <──attest (notary)──  POST /api/notarize
-                                 ──getAttestation──>  browser /verify (public RPC)
+TesseraAttestations (BSC 97)     <──commit (notary)──  same report hash, links the BAS attestation
+                                 ──read by hash──>   browser /verify (public RPC)
 ```
 
 The agent runs an **in-process tool-calling loop** over the Anthropic Messages API. Backends
@@ -218,6 +235,7 @@ Backend (`.env`):
 | `CACHE_TTL` | In-memory upstream cache | `10m` |
 | `NOTARY_PRIVATE_KEY` | Key that signs verdict attestations on BNB Chain; notarisation is off without it. Use a dedicated wallet | — |
 | `NOTARY_RPC_URL` / `NOTARY_BAS_CONTRACT` / `NOTARY_CHAIN_ID` | Chain and BAS contract for attestations | BSC testnet publicnode · `0x6c22…7CBD` · `97` |
+| `NOTARY_REGISTRY_CONTRACT` | TesseraAttestations, which also receives each notarised report hash; empty to skip | `0x56e6…8427` |
 | `NOTARY_DAILY_BUDGET` | Attestations per day, 0 = unlimited | `50` |
 | `PUBLIC_URL` | This API's public URL, written into attested report links | Railway domain, else `http://localhost:$PORT` |
 
@@ -310,7 +328,7 @@ internal/
   report/           Markdown + branded PDF generation
   server/           HTTP API: app, middleware, SSE, handlers
 frontend/           Next.js 16 app (separate repo: TesseraBNB/Tessera-frontend)
-contracts/          TesseraAttestations — first, standalone verdict notary on BSC (Foundry)
+contracts/          TesseraAttestations — Tessera's verdict registry on BSC (Foundry)
 Dockerfile · railway.toml
 ```
 

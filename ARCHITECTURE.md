@@ -79,8 +79,10 @@ attestations under one registered schema (`notary.Schema`, UID pinned in a test)
 titled agent run writes `<id>.md`, `<id>.evidence.json` and `<id>.run.json` to `reports/`
 (a Railway volume in production); the record holds the keccak256 of the first two files.
 `POST /api/notarize` re-hashes both, then signs one `attest` transaction with
-`NOTARY_PRIVATE_KEY` (serialised, so nonces never collide); repeat calls return the stored
-receipt, and a daily budget caps spending. The browser verifies on its own: it reads the
+`NOTARY_PRIVATE_KEY` (serialised, so nonces never collide), then commits the same report hash
+to Tessera's own `TesseraAttestations` contract with the BAS attestation as its evidence URI.
+Repeat calls return the stored receipt (finishing the registry commit if an earlier try
+missed it), and a daily budget caps spending. The browser verifies on its own: it reads the
 attestation over a public RPC (viem) and hashes the report locally.
 
 ## HTTP layer (`internal/server`)
