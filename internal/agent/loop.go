@@ -116,9 +116,10 @@ Then write the report in Markdown with these sections: Summary verdict (fund / h
 	return trimToReport(md), err
 }
 
-// reportOnly asks for a final message that is the report alone. Some models
-// narrate their planning as plain text in the final turn.
-const reportOnly = "Your final message must contain only the report: begin it with a top-level Markdown heading, with no planning, commentary, or tool narration before it."
+// reportOnly asks for a final message that is the report alone (some models
+// narrate their planning as plain text in the final turn), with the call on a
+// fixed line so it can be read reliably when the verdict is notarised.
+const reportOnly = "Your final message must contain only the report: begin it with a top-level Markdown heading, with no planning, commentary, or tool narration before it. Directly under that heading, state the call on its own line, exactly one of: **Verdict: FUND**, **Verdict: HOLD** or **Verdict: REJECT**."
 
 var mdHeading = regexp.MustCompile(`(?m)^#{1,6} `)
 

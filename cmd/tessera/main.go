@@ -14,6 +14,7 @@ import (
 	"github.com/yeheskieltame/tessera/internal/config"
 	"github.com/yeheskieltame/tessera/internal/data"
 	"github.com/yeheskieltame/tessera/internal/mcp"
+	"github.com/yeheskieltame/tessera/internal/notary"
 	"github.com/yeheskieltame/tessera/internal/report"
 	"github.com/yeheskieltame/tessera/internal/server"
 )
@@ -68,6 +69,8 @@ func main() {
 		cmdServe()
 	case "mcp":
 		cmdMCP(ctx)
+	case "notary-setup":
+		cmdNotarySetup(ctx)
 	case "help", "--help", "-h":
 		printUsage()
 	default:
@@ -122,7 +125,8 @@ COMMANDS:
   scan-chain          Scan an address across 11 EVM chains (BSC, opBNB, Ethereum, Base, OP, Arb, Mantle, Scroll, Linea, zkSync, BSC Testnet)
     <address>           EVM address to scan (required)
   serve               Start HTTP API server (PORT env or default 8080)
-  mcp                 Run as an MCP server over stdio (for Hermes / Claude Code)`)
+  mcp                 Run as an MCP server over stdio (for Hermes / Claude Code)
+  notary-setup        Check the verdict notary wallet and register Tessera's BAS schema (needs NOTARY_PRIVATE_KEY)`)
 }
 
 // --- serve ---
@@ -1816,4 +1820,38 @@ Be specific with numbers. Do not use emojis.`, address, historyLines)
 			fmt.Printf("\n  [via %s/%s]\n", resp.Provider, resp.Model)
 		}
 	}
+}
+
+// --- notary-setup ---
+
+// cmdNotarySetup checks the notary wallet and registers Tessera's verdict
+// schema in the BAS schema registry if it is not there yet (one transaction).
+func cmdNotarySetup(ctx context.Context) {
+	cfg := config.Load()
+	n, err := notary.New(ctx, notary.Config{RPCURL: cfg.NotaryRPCURL, PrivateKey: cfg.NotaryPrivateKey, BAS: cfg.NotaryBAS, ChainID: cfg.NotaryChainID})
+	exitOnErr(err)
+	if n == nil {
+		fmt.Fprintln(os.Stderr, "NOTARY_PRIVATE_KEY is not set")
+		os.Exit(1)
+	}
+	bal, err := n.Balance(ctx)
+	exitOnErr(err)
+	fmt.Printf("Attester:   %s (%s BNB on chain %d)\n", n.Attester().Hex(), formatWei(bal), n.ChainID())
+	fmt.Printf("BAS:        %s\n", n.Contract().Hex())
+	fmt.Printf("Schema:     %s\n", notary.Schema)
+	fmt.Printf("Schema UID: %s\n", notary.SchemaUID().Hex())
+
+	tx, err := n.RegisterSchema(ctx)
+	exitOnErr(err)
+	if tx == "" {
+		fmt.Println("Schema already registered.")
+	} else {
+		fmt.Printf("Schema registered in tx %s%s\n", notary.TxExplorerURL, tx)
+	}
+	fmt.Printf("Explorer:   %s/schema/%s\n", notary.ExplorerURL, notary.SchemaUID().Hex())
+}
+
+func formatWei(wei *big.Int) string {
+	f, _ := new(big.Float).Quo(new(big.Float).SetInt(wei), big.NewFloat(1e18)).Float64()
+	return fmt.Sprintf("%.4f", f)
 }

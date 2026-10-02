@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"sync"
 	"syscall"
 	"time"
 
@@ -20,6 +21,7 @@ import (
 	"github.com/yeheskieltame/tessera/internal/config"
 	"github.com/yeheskieltame/tessera/internal/data"
 	"github.com/yeheskieltame/tessera/internal/mcp"
+	"github.com/yeheskieltame/tessera/internal/notary"
 )
 
 // App holds shared dependencies and serves the Tessera HTTP API.
@@ -31,20 +33,37 @@ type App struct {
 	log     *slog.Logger
 	limiter *rateLimiter
 	budget  *dailyBudget
+
+	// verdict notary (nil when NOTARY_PRIVATE_KEY is unset or the chain is unreachable)
+	notary       *notary.Notary
+	notaryBudget *dailyBudget
+	notaryMu     sync.Mutex // one notarisation at a time: no double attestations
 }
 
 // New constructs an App from configuration.
 func New(cfg *config.Config) *App {
 	ag := agent.New(cfg)
-	return &App{
-		cfg:     cfg,
-		agent:   ag,
-		mcp:     mcp.NewServer(ag),
-		octant:  data.NewOctantClient(),
-		log:     slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})),
-		limiter: newRateLimiter(cfg.RateLimitRPS, cfg.RateLimitBurst),
-		budget:  newDailyBudget(cfg.AgentDailyBudget),
+	a := &App{
+		cfg:          cfg,
+		agent:        ag,
+		mcp:          mcp.NewServer(ag),
+		octant:       data.NewOctantClient(),
+		log:          slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})),
+		limiter:      newRateLimiter(cfg.RateLimitRPS, cfg.RateLimitBurst),
+		budget:       newDailyBudget(cfg.AgentDailyBudget),
+		notaryBudget: newDailyBudget(cfg.NotaryDailyBudget),
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	n, err := notary.New(ctx, notary.Config{RPCURL: cfg.NotaryRPCURL, PrivateKey: cfg.NotaryPrivateKey, BAS: cfg.NotaryBAS, ChainID: cfg.NotaryChainID})
+	switch {
+	case err != nil:
+		a.log.Warn("verdict notary disabled", "error", err.Error())
+	case n != nil:
+		a.notary = n
+		a.log.Info("verdict notary ready", "attester", n.Attester().Hex(), "chainId", n.ChainID())
+	}
+	return a
 }
 
 // Handler wires routes and wraps them with the middleware chain.
@@ -74,6 +93,10 @@ func (a *App) Handler() http.Handler {
 	// Reports
 	mux.HandleFunc("GET /api/reports", a.handleListReports)
 	mux.HandleFunc("GET /api/reports/{name}", a.handleServeReport)
+
+	// Verdict notary (BAS on BSC)
+	mux.HandleFunc("GET /api/notary", a.handleNotaryInfo)
+	mux.HandleFunc("POST /api/notarize", a.handleNotarize)
 
 	// MCP (Model Context Protocol) over HTTP — exposes Tessera's tools to
 	// external agents (e.g. Claude Code via Hermes).

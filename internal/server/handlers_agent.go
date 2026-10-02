@@ -59,7 +59,8 @@ func (a *App) handleAgentAnalyze(w http.ResponseWriter, r *http.Request) {
 		a.jsonError(w, "address query parameter is required", http.StatusBadRequest)
 		return
 	}
-	a.runAgentStream(w, r, "Project Analysis: "+address, func(ctx context.Context, emit agent.EventFunc) (string, error) {
+	meta := runMeta{Title: "Project Analysis: " + address, Kind: "project-analysis", Subject: address}
+	a.runAgentStream(w, r, meta, func(ctx context.Context, emit agent.EventFunc) (string, error) {
 		return a.agent.AnalyzeProject(ctx, address, emit)
 	})
 }
@@ -73,7 +74,8 @@ func (a *App) handleAgentEvaluate(w http.ResponseWriter, r *http.Request) {
 		a.jsonError(w, "name and description are required", http.StatusBadRequest)
 		return
 	}
-	a.runAgentStream(w, r, "Project Evaluation: "+name, func(ctx context.Context, emit agent.EventFunc) (string, error) {
+	meta := runMeta{Title: "Project Evaluation: " + name, Kind: "proposal-evaluation", Subject: name}
+	a.runAgentStream(w, r, meta, func(ctx context.Context, emit agent.EventFunc) (string, error) {
 		return a.agent.EvaluateProposal(ctx, name, desc, github, emit)
 	})
 }
@@ -84,14 +86,15 @@ func (a *App) handleAgentChat(w http.ResponseWriter, r *http.Request) {
 		a.jsonError(w, "message query parameter is required", http.StatusBadRequest)
 		return
 	}
-	a.runAgentStream(w, r, "", func(ctx context.Context, emit agent.EventFunc) (string, error) {
+	a.runAgentStream(w, r, runMeta{}, func(ctx context.Context, emit agent.EventFunc) (string, error) {
 		return a.agent.Run(ctx, agent.AnalystSystem, msg, emit)
 	})
 }
 
 // runAgentStream guards, opens an SSE stream, runs the agent forwarding its
-// events, then emits a final "result" event (with a PDF report when titled).
-func (a *App) runAgentStream(w http.ResponseWriter, r *http.Request, reportTitle string, run func(ctx context.Context, emit agent.EventFunc) (string, error)) {
+// events, then emits a final "result" event. Titled runs also get a PDF and a
+// run record (report, evidence, hashes) that can later be notarised.
+func (a *App) runAgentStream(w http.ResponseWriter, r *http.Request, meta runMeta, run func(ctx context.Context, emit agent.EventFunc) (string, error)) {
 	if !a.agent.HasBackend() {
 		a.jsonError(w, "no AI backend configured", http.StatusServiceUnavailable)
 		return
@@ -112,9 +115,20 @@ func (a *App) runAgentStream(w http.ResponseWriter, r *http.Request, reportTitle
 	// The final "done" event names the backend and model that answered, which
 	// may be the fallback rather than the primary.
 	provider, model := strings.Join(a.agent.Backends(), "+"), a.cfg.Model
+	var evidence []evidenceItem
 	md, err := run(ctx, func(e agent.Event) {
-		if e.Type == "done" && e.Provider != "" {
-			provider, model = e.Provider, e.Model
+		switch e.Type {
+		case "done":
+			if e.Provider != "" {
+				provider, model = e.Provider, e.Model
+			}
+		case "tool_call":
+			evidence = append(evidence, evidenceItem{Tool: e.Tool, Input: e.Input})
+		case "tool_result":
+			// tools run right after they are called, so a result belongs to the last call
+			if n := len(evidence); n > 0 && evidence[n-1].Tool == e.Tool {
+				evidence[n-1].Result, evidence[n-1].IsError = e.Result, e.IsError
+			}
 		}
 		sse.send(e.Type, e)
 	})
@@ -123,10 +137,19 @@ func (a *App) runAgentStream(w http.ResponseWriter, r *http.Request, reportTitle
 		return
 	}
 
+	// JSON would replace invalid UTF-8 anyway; doing it first keeps the stored,
+	// hashed and streamed report byte-identical, so browsers can verify it.
+	md = strings.ToValidUTF8(md, "\uFFFD")
 	result := map[string]any{"report": md}
-	if reportTitle != "" && strings.TrimSpace(md) != "" {
-		if path := a.generateReportPDF(reportTitle, md, provider, model); path != "" {
+	if meta.Title != "" && strings.TrimSpace(md) != "" {
+		path := a.generateReportPDF(meta.Title, md, provider, model)
+		if path != "" {
 			result["reportPath"] = filepath.Base(path)
+		}
+		if rec, err := a.saveRun(meta, path, md, evidence, provider, model); err != nil {
+			a.log.Warn("run record not saved", "error", err.Error())
+		} else {
+			result["reportId"], result["reportHash"], result["verdict"] = rec.ID, rec.ReportHash, rec.Verdict
 		}
 	}
 	sse.send("result", result)

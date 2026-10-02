@@ -37,6 +37,15 @@ type Config struct {
 	OSOAPIKey   string
 	GitHubToken string
 
+	// Verdict notary: BNB Attestation Service (BAS) on BNB Smart Chain.
+	// Notarisation is off when NotaryPrivateKey is empty.
+	NotaryPrivateKey  string
+	NotaryRPCURL      string
+	NotaryBAS         string // BAS (EAS) contract
+	NotaryChainID     int64
+	NotaryDailyBudget int    // attestations per day; 0 = unlimited
+	PublicURL         string // this API's public base URL, used in attested report links
+
 	// Limits & guards
 	RateLimitRPS       float64       // per-IP token-bucket refill rate (req/sec)
 	RateLimitBurst     int           // per-IP burst size
@@ -57,13 +66,18 @@ const (
 	defaultAgentDailyBudget   = 0
 	defaultRequestTimeout     = 90 * time.Second
 	defaultCacheTTL           = 10 * time.Minute
+	defaultNotaryRPCURL       = "https://bsc-testnet-rpc.publicnode.com"
+	defaultNotaryBAS          = "0x6c2270298b1e6046898a322acB3Cbad6F99f7CBD" // BAS on BSC testnet
+	defaultNotaryChainID      = 97
+	defaultNotaryDailyBudget  = 50
 )
 
 // Load reads configuration from the process environment, applying defaults.
 func Load() *Config {
 	model := getEnv("TESSERA_MODEL", defaultModel)
+	port := getEnv("PORT", defaultPort)
 	return &Config{
-		Port:               getEnv("PORT", defaultPort),
+		Port:               port,
 		AllowedOrigins:     splitCSV(getEnv("ALLOWED_ORIGINS", defaultAllowedOrigins)),
 		HermesBaseURL:      strings.TrimRight(os.Getenv("HERMES_BASE_URL"), "/"),
 		HermesToken:        os.Getenv("HERMES_TOKEN"),
@@ -75,6 +89,12 @@ func Load() *Config {
 		FallbackModel:      getEnv("FALLBACK_MODEL", model),
 		OSOAPIKey:          os.Getenv("OSO_API_KEY"),
 		GitHubToken:        os.Getenv("GITHUB_TOKEN"),
+		NotaryPrivateKey:   os.Getenv("NOTARY_PRIVATE_KEY"),
+		NotaryRPCURL:       getEnv("NOTARY_RPC_URL", defaultNotaryRPCURL),
+		NotaryBAS:          getEnv("NOTARY_BAS_CONTRACT", defaultNotaryBAS),
+		NotaryChainID:      int64(getEnvInt("NOTARY_CHAIN_ID", defaultNotaryChainID)),
+		NotaryDailyBudget:  getEnvInt("NOTARY_DAILY_BUDGET", defaultNotaryDailyBudget),
+		PublicURL:          publicURL(port),
 		RateLimitRPS:       getEnvFloat("RATE_LIMIT_RPS", defaultRateLimitRPS),
 		RateLimitBurst:     getEnvInt("RATE_LIMIT_BURST", defaultRateLimitBurst),
 		AgentMaxIterations: getEnvInt("AGENT_MAX_ITERATIONS", defaultAgentMaxIterations),
@@ -98,6 +118,18 @@ func (c *Config) Validate() error {
 }
 
 // --- env helpers ---
+
+// publicURL is PUBLIC_URL, else the domain Railway assigns the service, else
+// the local listener.
+func publicURL(port string) string {
+	if u := strings.TrimRight(os.Getenv("PUBLIC_URL"), "/"); u != "" {
+		return u
+	}
+	if d := os.Getenv("RAILWAY_PUBLIC_DOMAIN"); d != "" {
+		return "https://" + d
+	}
+	return "http://localhost:" + port
+}
 
 func getEnv(key, def string) string {
 	if v := os.Getenv(key); v != "" {
