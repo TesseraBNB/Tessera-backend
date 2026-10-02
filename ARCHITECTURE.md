@@ -1,13 +1,13 @@
 # Architecture
 
-Tessera is a Go API service (run on the user's machine, or any container host) plus a
+Tessera is a Go API service (hosted on Railway from its Dockerfile, or run locally) plus a
 Next.js app (Vercel). The Go service embeds an autonomous agent that drives an
 **in-process tool-calling loop** over the Anthropic Messages API.
 
 ## Topology
 
 ```
-                         Vercel                   localhost:8080 (or a host)
+                         Vercel                   Railway (or localhost:8080)
 ┌───────────┐      ┌──────────────────┐       ┌──────────────────────────────┐
 │  Browser  │─────▶│  Next.js 16 app  │──SSE─▶│  Go service (internal/server) │
 └───────────┘      │  NEXT_PUBLIC_API │ JSON  │  http.Server + timeouts +     │

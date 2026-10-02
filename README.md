@@ -38,10 +38,10 @@ Pitch deck: [Slides/Tessera_Deck.pdf](Slides/Tessera_Deck.pdf) (every figure fro
 ## Architecture
 
 ```
-Browser ── https://tessera-bnb.vercel.app (Next.js 16)
-   │  the page calls the team's demo backend, or http://localhost:8080 on the visitor's machine
+Browser ── https://tessera-bnb.vercel.app (Next.js 16, Vercel)
+   │  calls the hosted API; falls back to http://localhost:8080 when it does not answer
    ▼
-Your machine: Go service (go run ./cmd/tessera serve)
+Go service on Railway (Dockerfile) — or `go run ./cmd/tessera serve` on your machine
    ├─ /api/*         JSON (fast, no LLM)
    ├─ /api/agent/*   SSE (tool_call → result → text)
    └─ internal/agent ── tool loop ──> Anthropic Messages API provider, with fallback
@@ -55,11 +55,16 @@ Anthropic API when unset, or any compatible provider such as xKiro), then an opt
 fallback provider with its own model id. Tools execute inside the Go process, so no tool
 endpoint is ever exposed to the network. See [ARCHITECTURE.md](ARCHITECTURE.md) for detail.
 
+## Try it
+
+Open **https://tessera-bnb.vercel.app** — nothing to install. The UI talks to the hosted API
+at `https://tessera-api-production-bef4.up.railway.app` (Railway); the model badge in the top-right shows it
+is connected. In the console, paste an Octant payout address (e.g. rotki
+`0x9531c059098e3d194ff87febb587ab07b30b1306`) and run the agent, or explore an epoch.
+
 ## Run it locally
 
-The UI is live at **https://tessera-bnb.vercel.app**. It uses the team's demo backend when
-that is up, and otherwise a Tessera backend on **your** machine at `http://localhost:8080` —
-so if the badge says "offline", start the backend and reload.
+To run your own backend (and, optionally, the UI) on your machine:
 
 **1. Backend** (Go ≥ 1.25)
 
@@ -72,12 +77,9 @@ go run ./cmd/tessera serve    # → http://localhost:8080
 
 Check it: `curl http://localhost:8080/api/health` → `{"status":"ok"}`.
 
-**2. Open the UI** at https://tessera-bnb.vercel.app/dashboard. The badge in the top-right
-shows the model once the backend is reachable ("offline" means it is not running). Chrome
-may ask to let the site reach devices on your local network; allow it. If your browser
-blocks requests from a public site to `localhost`, run the frontend locally (step 3).
-
-**3. Frontend locally (optional)** — Node ≥ 20, pnpm:
+**2. Frontend locally** — Node ≥ 20, pnpm. The deployed site prefers the hosted API and only
+falls back to your `localhost:8080` when that is unreachable, so run the UI locally to use your
+own backend:
 
 ```bash
 git clone https://github.com/TesseraBNB/Tessera-frontend.git && cd Tessera-frontend
@@ -162,12 +164,13 @@ agent can call the same tools. Both transports share one core (`internal/mcp`).
 
 ## Deploy
 
-- **Frontend → Vercel:** https://tessera-bnb.vercel.app from `TesseraBNB/Tessera-frontend`.
-  `NEXT_PUBLIC_API_URL` names a preferred backend (e.g. a tunnel to the team's machine); the
-  site falls back to `http://localhost:8080` on the visitor's machine when it does not answer.
-- **Backend:** runs locally (above). It is also container-ready for hosting: `Dockerfile` +
-  `railway.toml` (healthcheck `/api/health`). If you host it, set `NEXT_PUBLIC_API_URL` on
-  Vercel to its URL and keep the frontend origin in `ALLOWED_ORIGINS`.
+- **Frontend → Vercel:** https://tessera-bnb.vercel.app from `TesseraBNB/Tessera-frontend`,
+  deployed on every push to `main`. `NEXT_PUBLIC_API_URL` (set at build time) is the hosted
+  API; the site falls back to `http://localhost:8080` when it does not answer.
+- **Backend → Railway:** `https://tessera-api-production-bef4.up.railway.app`, built from `Dockerfile`
+  (`railway.toml`: healthcheck `/api/health`) and deployed on every push to `main` of
+  `TesseraBNB/Tessera-backend`. Its variables mirror `.env.example`; keep the frontend origin in
+  `ALLOWED_ORIGINS`. `.railwayignore` keeps manual `railway up` uploads small.
 
 ## Development
 
