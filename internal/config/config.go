@@ -42,6 +42,7 @@ type Config struct {
 	NotaryPrivateKey  string
 	NotaryRPCURL      string
 	NotaryBAS         string // BAS (EAS) contract
+	NotaryRegistry    string // TesseraAttestations; empty to skip the second record
 	NotaryChainID     int64
 	NotaryDailyBudget int    // attestations per day; 0 = unlimited
 	PublicURL         string // this API's public base URL, used in attested report links
@@ -68,6 +69,7 @@ const (
 	defaultCacheTTL           = 10 * time.Minute
 	defaultNotaryRPCURL       = "https://bsc-testnet-rpc.publicnode.com"
 	defaultNotaryBAS          = "0x6c2270298b1e6046898a322acB3Cbad6F99f7CBD" // BAS on BSC testnet
+	defaultNotaryRegistry     = "0x56e6472693982df91df33842f1d087f2e4308427" // TesseraAttestations on BSC testnet
 	defaultNotaryChainID      = 97
 	defaultNotaryDailyBudget  = 50
 )
@@ -92,6 +94,7 @@ func Load() *Config {
 		NotaryPrivateKey:   os.Getenv("NOTARY_PRIVATE_KEY"),
 		NotaryRPCURL:       getEnv("NOTARY_RPC_URL", defaultNotaryRPCURL),
 		NotaryBAS:          getEnv("NOTARY_BAS_CONTRACT", defaultNotaryBAS),
+		NotaryRegistry:     getEnv("NOTARY_REGISTRY_CONTRACT", defaultNotaryRegistry),
 		NotaryChainID:      int64(getEnvInt("NOTARY_CHAIN_ID", defaultNotaryChainID)),
 		NotaryDailyBudget:  getEnvInt("NOTARY_DAILY_BUDGET", defaultNotaryDailyBudget),
 		PublicURL:          publicURL(port),

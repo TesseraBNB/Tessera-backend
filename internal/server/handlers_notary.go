@@ -137,6 +137,7 @@ type notaryInfo struct {
 	Enabled   bool   `json:"enabled"`
 	ChainID   int64  `json:"chainId"`
 	Contract  string `json:"contract"`
+	Registry  string `json:"registry,omitempty"`
 	RPCURL    string `json:"rpcUrl"`
 	Schema    string `json:"schema"`
 	SchemaUID string `json:"schemaUid"`
@@ -148,6 +149,7 @@ func (a *App) handleNotaryInfo(w http.ResponseWriter, r *http.Request) {
 	info := notaryInfo{
 		ChainID:   a.cfg.NotaryChainID,
 		Contract:  a.cfg.NotaryBAS,
+		Registry:  a.cfg.NotaryRegistry,
 		RPCURL:    a.cfg.NotaryRPCURL,
 		Schema:    notary.Schema,
 		SchemaUID: notary.SchemaUID().Hex(),
@@ -163,6 +165,7 @@ type notarizeResponse struct {
 	*notary.Receipt
 	AttestationURL string `json:"attestationUrl"`
 	TxURL          string `json:"txUrl"`
+	RegistryTxURL  string `json:"registryTxUrl,omitempty"`
 	ReportURI      string `json:"reportUri"`
 	ReportHash     string `json:"reportHash"`
 	EvidenceHash   string `json:"evidenceHash"`
@@ -197,6 +200,10 @@ func (a *App) handleNotarize(w http.ResponseWriter, r *http.Request) {
 	}
 	reportURI := a.cfg.PublicURL + "/api/reports/" + rec.ID + ".md"
 	if rec.Notary != nil {
+		// already attested; finish the registry record if an earlier try missed it
+		if rec.Notary.RegistryTxHash == "" {
+			a.commitToRegistry(r.Context(), rec)
+		}
 		a.writeJSON(w, http.StatusOK, a.notarizeResponse(rec, reportURI))
 		return
 	}
@@ -233,12 +240,38 @@ func (a *App) handleNotarize(w http.ResponseWriter, r *http.Request) {
 	if err := writeRun(rec); err != nil {
 		a.log.Error("notary receipt not saved", "id", rec.ID, "uid", receipt.UID, "error", err.Error())
 	}
+	a.commitToRegistry(r.Context(), rec)
 	a.log.Info("verdict notarised", "id", rec.ID, "uid", receipt.UID, "tx", receipt.TxHash)
 	a.writeJSON(w, http.StatusOK, a.notarizeResponse(rec, reportURI))
 }
 
+// commitToRegistry records the run's report hash in TesseraAttestations too,
+// pointing at its BAS attestation. The BAS attestation stands on its own, so a
+// failure is logged and retried on the next notarize call, not returned.
+func (a *App) commitToRegistry(ctx context.Context, rec *runRecord) {
+	if a.notary.Registry() == (common.Address{}) {
+		return
+	}
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+	projectID := rec.Kind + ":" + rec.Subject
+	tx, err := a.notary.CommitToRegistry(ctx, common.HexToHash(rec.ReportHash), rec.Verdict, projectID,
+		notary.ExplorerURL+"/attestation/"+rec.Notary.UID)
+	if err != nil {
+		a.log.Warn("TesseraAttestations commit failed", "id", rec.ID, "error", err.Error())
+		return
+	}
+	rec.Notary.Registry = a.notary.Registry().Hex()
+	if tx != "" {
+		rec.Notary.RegistryTxHash = tx
+	}
+	if err := writeRun(rec); err != nil {
+		a.log.Error("registry receipt not saved", "id", rec.ID, "error", err.Error())
+	}
+}
+
 func (a *App) notarizeResponse(rec *runRecord, reportURI string) notarizeResponse {
-	return notarizeResponse{
+	resp := notarizeResponse{
 		Receipt:        rec.Notary,
 		AttestationURL: notary.ExplorerURL + "/attestation/" + rec.Notary.UID,
 		TxURL:          notary.TxExplorerURL + rec.Notary.TxHash,
@@ -247,4 +280,8 @@ func (a *App) notarizeResponse(rec *runRecord, reportURI string) notarizeRespons
 		EvidenceHash:   rec.EvidenceHash,
 		Verdict:        rec.Verdict,
 	}
+	if rec.Notary.RegistryTxHash != "" {
+		resp.RegistryTxURL = notary.TxExplorerURL + rec.Notary.RegistryTxHash
+	}
+	return resp
 }

@@ -1,9 +1,10 @@
-// Package notary records Tessera verdicts on BNB Chain as BNB Attestation
-// Service (BAS) attestations. BAS is the BNB ecosystem's deployment of the
-// Ethereum Attestation Service contracts. Each attestation is permanent, names
-// the analysed project as its recipient, and carries keccak256 hashes of the
-// report and of the evidence behind it, so anyone can later check that a
-// report is unaltered.
+// Package notary records Tessera verdicts on BNB Chain. Each verdict becomes a
+// BNB Attestation Service (BAS) attestation — BAS is the BNB ecosystem's
+// deployment of the Ethereum Attestation Service contracts — that is permanent,
+// names the analysed project as its recipient, and carries keccak256 hashes of
+// the report and of the evidence behind it, so anyone can later check that a
+// report is unaltered. The report hash is also committed to Tessera's own
+// TesseraAttestations contract, pointing back at the BAS attestation.
 package notary
 
 import (
@@ -30,11 +31,13 @@ const Schema = "address project,string subject,string kind,string verdict,bytes3
 
 // Defaults for BNB Smart Chain testnet.
 const (
-	DefaultRPCURL  = "https://bsc-testnet-rpc.publicnode.com"
-	DefaultBAS     = "0x6c2270298b1e6046898a322acB3Cbad6F99f7CBD" // BAS (EAS v1.3.0) on BSC testnet
-	DefaultChainID = 97
-	ExplorerURL    = "https://www.testnet.bascan.io"
-	TxExplorerURL  = "https://testnet.bscscan.com/tx/"
+	DefaultRPCURL = "https://bsc-testnet-rpc.publicnode.com"
+	DefaultBAS    = "0x6c2270298b1e6046898a322acB3Cbad6F99f7CBD" // BAS (EAS v1.3.0) on BSC testnet
+	// DefaultRegistry is Tessera's own TesseraAttestations contract on BSC testnet.
+	DefaultRegistry = "0x56e6472693982df91df33842f1d087f2e4308427"
+	DefaultChainID  = 97
+	ExplorerURL     = "https://www.testnet.bascan.io"
+	TxExplorerURL   = "https://testnet.bscscan.com/tx/"
 )
 
 const easABI = `[
@@ -49,9 +52,17 @@ const registryABI = `[
 {"type":"function","name":"getSchema","stateMutability":"view","inputs":[{"name":"uid","type":"bytes32"}],"outputs":[{"name":"","type":"tuple","components":[{"name":"uid","type":"bytes32"},{"name":"resolver","type":"address"},{"name":"revocable","type":"bool"},{"name":"schema","type":"string"}]}]}
 ]`
 
+// tesseraABI is the part of TesseraAttestations the notary uses; its RiskLevel
+// enum travels as uint8.
+const tesseraABI = `[
+{"type":"function","name":"commit","stateMutability":"nonpayable","inputs":[{"name":"verdictHash","type":"bytes32"},{"name":"riskLevel","type":"uint8"},{"name":"projectId","type":"string"},{"name":"evidenceUri","type":"string"}],"outputs":[]},
+{"type":"function","name":"isNotarized","stateMutability":"view","inputs":[{"name":"verdictHash","type":"bytes32"}],"outputs":[{"name":"","type":"bool"}]}
+]`
+
 var (
 	easParsed      = mustABI(easABI)
 	registryParsed = mustABI(registryABI)
+	tesseraParsed  = mustABI(tesseraABI)
 	schemaArgs     = mustArgs(Schema)
 )
 
@@ -82,26 +93,32 @@ type Receipt struct {
 	Attester  string `json:"attester"`
 	SchemaUID string `json:"schemaUid"`
 	Time      string `json:"time"`
+
+	// the same report hash committed to TesseraAttestations
+	Registry       string `json:"registry,omitempty"`
+	RegistryTxHash string `json:"registryTxHash,omitempty"`
 }
 
-// Config selects the chain, contract and signing key.
+// Config selects the chain, contracts and signing key.
 type Config struct {
 	RPCURL     string
 	PrivateKey string // hex, with or without 0x
 	BAS        string
+	Registry   string // TesseraAttestations; empty to skip
 	ChainID    int64
 }
 
 // Notary signs attestations with one key; calls are serialised so nonces
 // never collide.
 type Notary struct {
-	client   *ethclient.Client
-	key      *ecdsa.PrivateKey
-	from     common.Address
-	bas      common.Address
-	registry common.Address
-	chainID  *big.Int
-	mu       sync.Mutex
+	client  *ethclient.Client
+	key     *ecdsa.PrivateKey
+	from    common.Address
+	bas     common.Address
+	schemas common.Address // BAS schema registry
+	tessera common.Address // TesseraAttestations; zero when disabled
+	chainID *big.Int
+	mu      sync.Mutex
 }
 
 // New connects to the chain. It returns nil, nil when no key is configured.
@@ -116,6 +133,9 @@ func New(ctx context.Context, cfg Config) (*Notary, error) {
 	if !common.IsHexAddress(cfg.BAS) {
 		return nil, fmt.Errorf("invalid BAS contract address %q", cfg.BAS)
 	}
+	if cfg.Registry != "" && !common.IsHexAddress(cfg.Registry) {
+		return nil, fmt.Errorf("invalid TesseraAttestations address %q", cfg.Registry)
+	}
 	client, err := ethclient.DialContext(ctx, cfg.RPCURL)
 	if err != nil {
 		return nil, fmt.Errorf("notary RPC: %w", err)
@@ -127,11 +147,14 @@ func New(ctx context.Context, cfg Config) (*Notary, error) {
 		bas:     common.HexToAddress(cfg.BAS),
 		chainID: big.NewInt(cfg.ChainID),
 	}
+	if cfg.Registry != "" {
+		n.tessera = common.HexToAddress(cfg.Registry)
+	}
 	out, err := n.call(ctx, easParsed, n.bas, "getSchemaRegistry")
 	if err != nil {
 		return nil, fmt.Errorf("BAS contract at %s: %w", cfg.BAS, err)
 	}
-	n.registry = *abi.ConvertType(out[0], new(common.Address)).(*common.Address)
+	n.schemas = *abi.ConvertType(out[0], new(common.Address)).(*common.Address)
 	return n, nil
 }
 
@@ -140,6 +163,44 @@ func (n *Notary) Attester() common.Address { return n.from }
 
 // Contract is the BAS contract attestations are written to.
 func (n *Notary) Contract() common.Address { return n.bas }
+
+// Registry is the TesseraAttestations contract (zero when disabled).
+func (n *Notary) Registry() common.Address { return n.tessera }
+
+// RiskLevel maps a verdict to TesseraAttestations' RiskLevel enum:
+// FUND → LOW (0), HOLD → MEDIUM (1), REJECT → HIGH (2), anything else → UNKNOWN (3).
+func RiskLevel(verdict string) uint8 {
+	switch verdict {
+	case "FUND":
+		return 0
+	case "HOLD":
+		return 1
+	case "REJECT":
+		return 2
+	}
+	return 3
+}
+
+// CommitToRegistry records reportHash in TesseraAttestations, pointing at the
+// BAS attestation. It returns "" without a transaction when the registry is
+// disabled or already holds the hash.
+func (n *Notary) CommitToRegistry(ctx context.Context, reportHash common.Hash, verdict, projectID, evidenceURI string) (string, error) {
+	if n.tessera == (common.Address{}) {
+		return "", nil
+	}
+	out, err := n.call(ctx, tesseraParsed, n.tessera, "isNotarized", reportHash)
+	if err != nil {
+		return "", err
+	}
+	if done, _ := out[0].(bool); done {
+		return "", nil
+	}
+	rec, err := n.transact(ctx, tesseraParsed, n.tessera, "commit", reportHash, RiskLevel(verdict), projectID, evidenceURI)
+	if err != nil {
+		return "", err
+	}
+	return rec.TxHash.Hex(), nil
+}
 
 // ChainID is the chain the notary writes to.
 func (n *Notary) ChainID() int64 { return n.chainID.Int64() }
@@ -158,7 +219,7 @@ type schemaRecord struct {
 
 // SchemaRegistered reports whether Tessera's schema exists in the registry.
 func (n *Notary) SchemaRegistered(ctx context.Context) (bool, error) {
-	out, err := n.call(ctx, registryParsed, n.registry, "getSchema", SchemaUID())
+	out, err := n.call(ctx, registryParsed, n.schemas, "getSchema", SchemaUID())
 	if err != nil {
 		return false, err
 	}
@@ -172,7 +233,7 @@ func (n *Notary) RegisterSchema(ctx context.Context) (string, error) {
 	if ok, err := n.SchemaRegistered(ctx); err != nil || ok {
 		return "", err
 	}
-	rec, err := n.transact(ctx, registryParsed, n.registry, "register", Schema, common.Address{}, false)
+	rec, err := n.transact(ctx, registryParsed, n.schemas, "register", Schema, common.Address{}, false)
 	if err != nil {
 		return "", err
 	}

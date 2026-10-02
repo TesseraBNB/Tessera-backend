@@ -55,7 +55,7 @@ func New(cfg *config.Config) *App {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	n, err := notary.New(ctx, notary.Config{RPCURL: cfg.NotaryRPCURL, PrivateKey: cfg.NotaryPrivateKey, BAS: cfg.NotaryBAS, ChainID: cfg.NotaryChainID})
+	n, err := notary.New(ctx, notary.Config{RPCURL: cfg.NotaryRPCURL, PrivateKey: cfg.NotaryPrivateKey, BAS: cfg.NotaryBAS, Registry: cfg.NotaryRegistry, ChainID: cfg.NotaryChainID})
 	switch {
 	case err != nil:
 		a.log.Warn("verdict notary disabled", "error", err.Error())

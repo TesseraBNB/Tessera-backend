@@ -41,6 +41,15 @@ func TestEncodeDecodeRoundTrip(t *testing.T) {
 	}
 }
 
+func TestRiskLevelMatchesContractEnum(t *testing.T) {
+	// TesseraAttestations.RiskLevel: LOW 0, MEDIUM 1, HIGH 2, UNKNOWN 3
+	for verdict, want := range map[string]uint8{"FUND": 0, "HOLD": 1, "REJECT": 2, "UNSPECIFIED": 3, "": 3} {
+		if got := RiskLevel(verdict); got != want {
+			t.Errorf("RiskLevel(%q) = %d, want %d", verdict, got, want)
+		}
+	}
+}
+
 func TestExtractVerdict(t *testing.T) {
 	cases := []struct{ md, want string }{
 		{"## Summary Verdict\n**Verdict: Hold / Investigate Further Confidence:** Medium", "HOLD"},

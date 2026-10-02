@@ -1828,7 +1828,7 @@ Be specific with numbers. Do not use emojis.`, address, historyLines)
 // schema in the BAS schema registry if it is not there yet (one transaction).
 func cmdNotarySetup(ctx context.Context) {
 	cfg := config.Load()
-	n, err := notary.New(ctx, notary.Config{RPCURL: cfg.NotaryRPCURL, PrivateKey: cfg.NotaryPrivateKey, BAS: cfg.NotaryBAS, ChainID: cfg.NotaryChainID})
+	n, err := notary.New(ctx, notary.Config{RPCURL: cfg.NotaryRPCURL, PrivateKey: cfg.NotaryPrivateKey, BAS: cfg.NotaryBAS, Registry: cfg.NotaryRegistry, ChainID: cfg.NotaryChainID})
 	exitOnErr(err)
 	if n == nil {
 		fmt.Fprintln(os.Stderr, "NOTARY_PRIVATE_KEY is not set")
@@ -1838,6 +1838,7 @@ func cmdNotarySetup(ctx context.Context) {
 	exitOnErr(err)
 	fmt.Printf("Attester:   %s (%s BNB on chain %d)\n", n.Attester().Hex(), formatWei(bal), n.ChainID())
 	fmt.Printf("BAS:        %s\n", n.Contract().Hex())
+	fmt.Printf("Registry:   %s (TesseraAttestations)\n", n.Registry().Hex())
 	fmt.Printf("Schema:     %s\n", notary.Schema)
 	fmt.Printf("Schema UID: %s\n", notary.SchemaUID().Hex())
 
