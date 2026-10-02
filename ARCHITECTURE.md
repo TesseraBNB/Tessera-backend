@@ -72,6 +72,17 @@ LLM evaluators live in `analysis` and used to depend on the provider layer. To k
 - `ethunit` — single wei→ETH implementation shared by `data` and `analysis` (a leaf package,
   so no cycle).
 
+## Verdict notary (`internal/notary`)
+
+Verdicts are recorded on BNB Chain as BNB Attestation Service (BAS, EAS v1.3.0)
+attestations under one registered schema (`notary.Schema`, UID pinned in a test). Each
+titled agent run writes `<id>.md`, `<id>.evidence.json` and `<id>.run.json` to `reports/`
+(a Railway volume in production); the record holds the keccak256 of the first two files.
+`POST /api/notarize` re-hashes both, then signs one `attest` transaction with
+`NOTARY_PRIVATE_KEY` (serialised, so nonces never collide); repeat calls return the stored
+receipt, and a daily budget caps spending. The browser verifies on its own: it reads the
+attestation over a public RPC (viem) and hashes the report locally.
+
 ## HTTP layer (`internal/server`)
 
 `App` holds all dependencies (config, agent, Octant client, logger, limiter, budget) — no

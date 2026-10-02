@@ -29,9 +29,10 @@ is invented.
   (May 2025); Gitcoin's own indexer went offline when Grants Stack shut down.
 
 **BNB Chain edition:** the on-chain scanner is BNB-first (BSC 56, opBNB 204, BSC testnet 97),
-and verdicts can be notarized on BSC testnet by `TesseraAttestations`
-([`0x56e6…8427`](https://testnet.bscscan.com/address/0x56e6472693982df91df33842f1d087f2e4308427#code),
-immutable, no admin, no custody). See [README-BNB.md](README-BNB.md) and [contracts/](contracts/).
+and every verdict can be notarised on BNB Chain as a **BNB Attestation Service** attestation
+holding the keccak256 of the report and of its evidence ([schema](https://www.testnet.bascan.io/schema/0xcd4d38906641353fefefe1caabcba23f730b0512039c1b3c5478d47cf97373f8)).
+Anyone can check a report against the chain at [/verify](https://tessera-bnb.vercel.app/verify).
+See [README-BNB.md](README-BNB.md); the earlier standalone notary contract is in [contracts/](contracts/).
 Pitch deck: [Slides/Tessera_Deck.pdf](Slides/Tessera_Deck.pdf) (every figure from
 [examples/agent-trace-epoch10.md](examples/agent-trace-epoch10.md) and live Octant data).
 
@@ -114,6 +115,10 @@ Backend (`.env`):
 | `AGENT_MAX_ITERATIONS` | Max tool-use rounds per run | `12` |
 | `AGENT_DAILY_BUDGET` | Global agent runs/day, 0 = unlimited | `0` |
 | `CACHE_TTL` | In-memory upstream cache | `10m` |
+| `NOTARY_PRIVATE_KEY` | Key that signs verdict attestations on BNB Chain; notarisation is off without it. Use a dedicated wallet | — |
+| `NOTARY_RPC_URL` / `NOTARY_BAS_CONTRACT` / `NOTARY_CHAIN_ID` | Chain and BAS contract for attestations | BSC testnet publicnode · `0x6c22…7CBD` · `97` |
+| `NOTARY_DAILY_BUDGET` | Attestations per day, 0 = unlimited | `50` |
+| `PUBLIC_URL` | This API's public URL, written into attested report links | Railway domain, else `http://localhost:$PORT` |
 
 The agent needs at least one of `HERMES_BASE_URL`, `ANTHROPIC_API_KEY`, or `FALLBACK_BASE_URL` + `FALLBACK_API_KEY`.
 
@@ -131,7 +136,8 @@ Frontend (Tessera-frontend `.env.local`, both optional): `NEXT_PUBLIC_API_URL` (
 | `GET /api/agent/analyze?address=` | **SSE** — full agent project analysis |
 | `GET /api/agent/evaluate?name=&description=&githubURL=` | **SSE** — proposal evaluation |
 | `GET /api/agent/chat?message=` | **SSE** — open-ended agent chat |
-| `GET /api/reports` · `GET /api/reports/{name}` | List / download generated PDF reports |
+| `GET /api/reports` · `GET /api/reports/{name}` | List / download a run's files: PDF, report `.md`, `.evidence.json`, `.run.json` |
+| `GET /api/notary` · `POST /api/notarize?id=` | Notary setup · record a run's verdict as a BAS attestation on BNB Chain |
 
 ## CLI
 
@@ -146,6 +152,7 @@ go build -o tessera ./cmd/tessera/
 ./tessera scan-chain <0xaddr>         # 11-chain on-chain scan (BNB Chain + EVM L1/L2s)
 ./tessera gitcoin-rounds [-r 42161:865]  # Gitcoin rounds, or one round's projects (needs OSO_API_KEY)
 ./tessera status                      # connectivity + agent backends
+./tessera notary-setup                # check the notary wallet, register the BAS schema once
 ```
 
 ## Use Tessera as an MCP server
@@ -192,10 +199,11 @@ internal/
   config/           typed env configuration
   data/             upstream clients (Octant, OSO SQL + Gitcoin, GitHub, Discourse, RetroPGF, chains) + cache/retry
   ethunit/          wei→ETH (leaf, shared)
+  notary/           verdict attestations on BNB Chain (BAS) via go-ethereum
   report/           Markdown + branded PDF generation
   server/           HTTP API: app, middleware, SSE, handlers
 frontend/           Next.js 16 app (separate repo: TesseraBNB/Tessera-frontend)
-contracts/          TesseraAttestations — verdict notary on BSC testnet (Foundry)
+contracts/          TesseraAttestations — first, standalone verdict notary on BSC testnet (Foundry)
 Dockerfile · railway.toml
 ```
 
